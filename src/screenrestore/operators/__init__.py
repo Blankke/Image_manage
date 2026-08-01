@@ -7,7 +7,9 @@ from .denoise import DenoiseOperator
 from .exposure import ExposureOperator
 from .geometry import GeometryOperator
 from .illumination import IlluminationOperator
+from .lens_distortion import LensDistortionOperator
 from .local_contrast import ClaheOperator
+from .mesh_warp import MeshWarpOperator
 from .model_plugin import ModelPluginOperator
 from .orientation import OrientationOperator
 from .reflection import ReflectionOperator
@@ -24,6 +26,8 @@ __all__ = [
     "ExposureOperator",
     "GeometryOperator",
     "IlluminationOperator",
+    "LensDistortionOperator",
+    "MeshWarpOperator",
     "ModelPluginOperator",
     "OrientationOperator",
     "ReflectionOperator",

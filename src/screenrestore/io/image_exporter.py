@@ -6,6 +6,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,34 @@ class ExportOptions:
 
 class ImageExportError(RuntimeError):
     """用户可读的导出错误。"""
+
+
+def encode_image_bytes(
+    image_rgb: np.ndarray,
+    output_format: ExportFormat = ExportFormat.PNG,
+    quality: int = 92,
+) -> bytes:
+    """为 Web 响应编码图像，不写临时文件或携带源图隐私元数据。"""
+
+    if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+        raise ImageExportError("编码需要 H×W×3 RGB uint8 图像")
+    if not 1 <= quality <= 100:
+        raise ImageExportError("编码质量必须位于 1..100")
+    options: dict[str, object] = {}
+    if output_format in (ExportFormat.JPEG, ExportFormat.WEBP):
+        options["quality"] = quality
+    if output_format == ExportFormat.JPEG:
+        options.update(optimize=True, subsampling=0)
+    stream = BytesIO()
+    try:
+        Image.fromarray(image_rgb, "RGB").save(
+            stream,
+            format=output_format.value,
+            **options,
+        )
+    except OSError as exc:
+        raise ImageExportError("无法编码 Web 输出图像") from exc
+    return stream.getvalue()
 
 
 def infer_export_format(path: str | Path) -> ExportFormat:
@@ -119,4 +148,3 @@ def _read_export_exif(
             return exif.tobytes()
     except OSError:
         return None
-

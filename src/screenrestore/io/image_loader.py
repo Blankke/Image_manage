@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,46 @@ def load_image(path: str | Path) -> ImageDocument:
     )
 
 
+def decode_image_bytes(
+    data: bytes,
+    filename: str = "upload",
+    max_pixels: int = 80_000_000,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """把 Web/内存上传安全解码为独立 RGB 数组和有限元数据。
+
+    文件名仅用于可读错误，不参与路径访问。像素上限会在完整解码前检查，避免压缩
+    炸弹占用不可控内存。
+    """
+
+    if not data:
+        raise ImageLoadError(f"上传图片为空：{Path(filename).name}")
+    if max_pixels <= 0:
+        raise ValueError("max_pixels 必须大于 0")
+    safe_name = Path(filename).name[:240] or "upload"
+    try:
+        with Image.open(BytesIO(data)) as opened:
+            width, height = opened.size
+            if width <= 0 or height <= 0 or width * height > max_pixels:
+                raise ImageLoadError(
+                    f"图片像素数超过限制：{width}×{height}，最多 {max_pixels:,} 像素"
+                )
+            exif = opened.getexif()
+            metadata: dict[str, Any] = {
+                "filename": safe_name,
+                "format": opened.format,
+                "mode": opened.mode,
+                "original_size": [width, height],
+                "exif": {str(key): _safe_metadata_value(value) for key, value in exif.items()},
+            }
+            oriented = ImageOps.exif_transpose(opened)
+            rgb = np.asarray(oriented.convert("RGB"), dtype=np.uint8).copy()
+    except ImageLoadError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ImageLoadError(f"无法读取上传图片：{safe_name}") from exc
+    return rgb, metadata
+
+
 def _sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     """流式计算文件摘要，避免复制大文件。"""
 
@@ -65,4 +106,3 @@ def _safe_metadata_value(value: Any) -> Any:
     if isinstance(value, bytes):
         return f"<bytes:{len(value)}>"
     return str(value)[:512]
-

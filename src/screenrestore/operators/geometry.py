@@ -1,15 +1,13 @@
 """平面屏幕四边形检测与透视恢复。
 
-数学假设：目标内容位于同一平面，可由单应矩阵描述。弯曲银幕、滚动快门、
-镜头严重畸变或被遮挡的边缘不满足该假设，必须依赖手工四角或未来 mesh warp。
+数学假设：本算子中的目标内容位于同一平面，可由单应矩阵描述。镜头畸变由上游
+``lens_distortion`` 处理，弯曲银幕由下游 ``mesh_warp`` 处理。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
-
 import cv2
 import numpy as np
 
@@ -76,13 +74,6 @@ class QuadrilateralCandidate:
     corners: np.ndarray
     confidence: float
     scores: dict[str, float]
-
-
-class MeshWarp(Protocol):
-    """为未来弯曲屏幕网格校正预留的协议。"""
-
-    def apply(self, image_rgb: np.ndarray, control_points: np.ndarray) -> np.ndarray:
-        """根据控制网格变形 RGB 图像。"""
 
 
 def order_corners(corners: np.ndarray) -> np.ndarray:

@@ -8,9 +8,13 @@ from screenrestore.core.presets import PresetId, apply_preset, build_default_pip
 def test_default_pipeline_has_safe_fixed_boundaries() -> None:
     pipeline = build_default_pipeline()
     ids = [state.operator.id for state in pipeline.states]
-    assert ids[:2] == ["orientation", "geometry"]
+    assert ids[:4] == ["orientation", "lens_distortion", "geometry", "mesh_warp"]
     assert ids[-1] == "resize"
     assert not pipeline.state("geometry").operator.reorderable
+    assert not pipeline.state("lens_distortion").operator.reorderable
+    assert not pipeline.state("mesh_warp").operator.reorderable
+    assert not pipeline.state("lens_distortion").enabled
+    assert not pipeline.state("mesh_warp").enabled
     assert not pipeline.state("resize").operator.reorderable
 
 

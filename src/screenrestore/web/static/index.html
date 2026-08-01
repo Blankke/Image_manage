@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>ScreenRestore Web</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LOCAL IMAGE LAB</p>
+        <h1>ScreenRestore</h1>
+      </div>
+      <div class="privacy-pill"><span></span>本机内存处理 · 不上传云端</div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="kicker">屏幕照片几何与多帧恢复</p>
+          <h2>把斜拍、弯曲与反光，拆成可验证的恢复步骤。</h2>
+          <p>支持镜头标定、四角透视、弯曲银幕网格，以及利用连拍中真实可见像素补回瞬态遮挡。</p>
+        </div>
+        <label id="dropZone" class="drop-zone" for="imageFiles">
+          <input id="imageFiles" type="file" accept="image/*" multiple>
+          <span class="drop-icon">＋</span>
+          <strong>选择或拖入照片</strong>
+          <small>单张做经典恢复；2～8 张连拍启用真实观测融合</small>
+        </label>
+      </section>
+
+      <section class="workspace">
+        <aside class="control-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-number">01</p>
+              <h3>输入与场景</h3>
+            </div>
+            <span id="fileCount" class="count-badge">0 张</span>
+          </div>
+          <ul id="fileSummary" class="file-summary"><li>尚未选择照片</li></ul>
+          <div class="field-grid two">
+            <label>场景预设
+              <select id="preset">
+                <option value="display">显示器</option>
+                <option value="electronic_poster">电子海报</option>
+                <option value="cinema">电影院 / 投影</option>
+                <option value="led">LED 大屏</option>
+                <option value="document">文档 / PPT</option>
+              </select>
+            </label>
+            <label>输出比例
+              <select id="ratioMode">
+                <option value="auto">AUTO</option>
+                <option value="estimated">估计边长</option>
+                <option value="free">自由</option>
+                <option value="16:9">16:9</option>
+                <option value="16:10">16:10</option>
+                <option value="4:3">4:3</option>
+                <option value="1.85:1">1.85:1</option>
+                <option value="2.39:1">2.39:1</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+          </div>
+          <label id="customRatioRow" class="hidden">自定义宽高比
+            <input id="customRatio" type="number" min="0.2" max="5" step="0.01" value="1.7778">
+          </label>
+
+          <details open>
+            <summary><span>02</span>镜头畸变</summary>
+            <label class="switch-line"><span>启用镜头校正</span><input id="lensEnabled" type="checkbox"></label>
+            <div class="field-grid two compact">
+              <label>模型
+                <select id="lensModel"><option value="pinhole">针孔</option><option value="fisheye">鱼眼</option></select>
+              </label>
+              <label>优化视场
+                <select id="optimizeCamera"><option value="false">保持内参</option><option value="true">自动裁切</option></select>
+              </label>
+              <label>焦距 X<input id="focalX" type="number" step="0.001" value="1"></label>
+              <label>焦距 Y<input id="focalY" type="number" step="0.001" value="1"></label>
+              <label>主点 X<input id="principalX" type="number" step="0.001" value="0.5"></label>
+              <label>主点 Y<input id="principalY" type="number" step="0.001" value="0.5"></label>
+              <label>k1<input id="k1" type="number" step="0.001" value="0"></label>
+              <label>k2<input id="k2" type="number" step="0.001" value="0"></label>
+              <label>p1<input id="p1" type="number" step="0.0001" value="0"></label>
+              <label>p2<input id="p2" type="number" step="0.0001" value="0"></label>
+              <label>k3<input id="k3" type="number" step="0.001" value="0"></label>
+              <label>k4（鱼眼）<input id="k4" type="number" step="0.001" value="0"></label>
+            </div>
+            <div class="calibration-box">
+              <p>棋盘格标定 <small>至少 5 个不同角度，填写内角点数</small></p>
+              <input id="calibrationFiles" type="file" accept="image/*" multiple>
+              <div class="field-grid three compact">
+                <label>横向<input id="boardColumns" type="number" min="3" max="30" value="9"></label>
+                <label>纵向<input id="boardRows" type="number" min="3" max="30" value="6"></label>
+                <label>方格尺寸<input id="squareSize" type="number" min="0.001" step="0.1" value="1"></label>
+              </div>
+              <button id="calibrateButton" class="secondary" type="button">计算镜头参数</button>
+            </div>
+          </details>
+
+          <details open>
+            <summary><span>03</span>弯曲银幕 Mesh</summary>
+            <label class="switch-line"><span>启用非线性网格</span><input id="meshEnabled" type="checkbox"></label>
+            <div class="field-grid two compact">
+              <label>网格列数<input id="meshColumns" type="number" min="2" max="15" value="7"></label>
+              <label>网格行数<input id="meshRows" type="number" min="2" max="15" value="5"></label>
+              <label>横向弯曲<input id="horizontalCurve" type="range" min="-0.2" max="0.2" step="0.005" value="0"></label>
+              <label>纵向弯曲<input id="verticalCurve" type="range" min="-0.2" max="0.2" step="0.005" value="0"></label>
+            </div>
+            <button id="applyCurve" class="secondary" type="button">生成对称网格起点</button>
+          </details>
+
+          <div class="action-stack">
+            <button id="restoreButton" class="primary" type="button" disabled>开始恢复</button>
+            <button id="downloadButton" class="secondary" type="button" disabled>下载 PNG</button>
+          </div>
+        </aside>
+
+        <section class="viewer-panel">
+          <div class="viewer-toolbar">
+            <div class="segmented" role="group" aria-label="画布模式">
+              <button id="editCorners" class="active" type="button">四角</button>
+              <button id="editMesh" type="button">Mesh</button>
+              <button id="viewResult" type="button">结果</button>
+            </div>
+            <div class="toolbar-actions">
+              <button id="autoDetect" type="button" disabled>自动四角</button>
+              <button id="resetGeometry" type="button" disabled>重置当前</button>
+            </div>
+          </div>
+          <div id="canvasStage" class="canvas-stage empty">
+            <canvas id="editorCanvas" width="960" height="600"></canvas>
+            <div id="emptyHint" class="empty-hint">
+              <span>SCREEN / POSTER / DOCUMENT</span>
+              <strong>拖入一张或一组连拍照片开始</strong>
+            </div>
+          </div>
+          <div class="status-row">
+            <div><span id="statusDot" class="status-dot"></span><span id="statusText">等待输入</span></div>
+            <progress id="progress" max="100" value="0"></progress>
+          </div>
+
+          <div class="diagnostics-card">
+            <div><p class="section-number">04</p><h3>可验证诊断</h3></div>
+            <pre id="diagnostics">处理后将显示多帧使用数量、实际观测补回比例、未解决比例和各算子耗时。</pre>
+          </div>
+          <div class="truth-note">
+            <strong>恢复边界</strong>
+            <p>如果所有输入都在同一区域过曝、遮挡或彻底模糊，像素信息并不存在。多帧模式只报告由其他帧真实观测补回的区域；单图修复不会被标成“真实还原”。</p>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

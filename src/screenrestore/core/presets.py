@@ -14,6 +14,8 @@ from screenrestore.operators import (
     ExposureOperator,
     GeometryOperator,
     IlluminationOperator,
+    LensDistortionOperator,
+    MeshWarpOperator,
     ModelPluginOperator,
     OrientationOperator,
     ReflectionOperator,
@@ -61,7 +63,9 @@ def build_registry() -> OperatorRegistry:
     return OperatorRegistry(
         [
             OrientationOperator(),
+            LensDistortionOperator(),
             GeometryOperator(),
+            MeshWarpOperator(),
             BandingOperator(),
             DemoireOperator(),
             DenoiseOperator(),
@@ -83,7 +87,14 @@ def build_default_pipeline(registry: OperatorRegistry | None = None) -> ImagePip
 
     active_registry = registry or build_registry()
     states = []
-    disabled_by_default = {"reflection", "deblur", "model_plugin", "resize"}
+    disabled_by_default = {
+        "lens_distortion",
+        "mesh_warp",
+        "reflection",
+        "deblur",
+        "model_plugin",
+        "resize",
+    }
     for operator_id in active_registry.ids:
         operator = active_registry.get(operator_id)
         states.append(

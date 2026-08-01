@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "screenrestore"
-version = "0.1.0"
+version = "0.2.0"
 description = "离线屏幕照片几何校正与图像恢复工具"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -30,6 +30,7 @@ dev = [
 [project.scripts]
 screenrestore = "screenrestore.cli:main"
 screenrestore-gui = "screenrestore.app:main"
+screenrestore-web = "screenrestore.web.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/screenrestore"]
@@ -50,4 +51,3 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
-

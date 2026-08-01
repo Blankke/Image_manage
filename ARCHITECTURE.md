@@ -3,11 +3,11 @@
 ## 边界
 
 ```text
-PySide6 UI / CLI
+PySide6 UI / CLI / 本地 Web UI + HTTP API
         ↓
-ImageDocument + ImagePipeline + ProcessingContext
+多帧观测融合（可选）→ ImageDocument + ImagePipeline + ProcessingContext
         ↓
-独立经典算子（RGB uint8 边界，内部 float32）
+方向 → 镜头畸变 → 平面透视 → 弯曲 Mesh → 独立经典恢复算子
         ↓
 OpenCV / NumPy / SciPy / Pillow
 
@@ -17,6 +17,7 @@ OpenCV / NumPy / SciPy / Pillow
 - `core/` 不依赖 Qt，定义只读图像文档、参数协议、算子接口、流水线、LRU 缓存、历史和取消令牌。
 - `operators/` 每个文件对应独立图像步骤。算子不得原地修改输入。
 - `ui/` 只协调状态、显示和线程；算法运行在 `QThreadPool` worker，worker 只通过信号返回结果。
+- `web/` 提供无框架、同源的静态前端和版本化本地 HTTP API；服务层只组合核心流水线，HTTP 层负责上传上限、并发上限、安全响应头和二进制编码，不在磁盘缓存用户图片。
 - `io/` 负责加载、项目和原子导出；GUI 与 CLI 不复制算法。
 - `inference/` 只在实际选择后惰性导入可选运行时，核心安装不包含它们；默认禁用的
   `ModelPluginOperator` 让 GUI、项目和 CLI 真正调用同一模型后端。
@@ -32,7 +33,13 @@ OpenCV / NumPy / SciPy / Pillow
 
 每个节点状态包含算子 ID、启用状态和参数字典。缓存键由源图 ID、节点序号、上游累计签名、算子版本和参数摘要组成。参数变化只淘汰当前及后续节点；缓存使用有界 LRU，默认 512 MiB。
 
-方向、几何和输出尺寸为固定位置；中间恢复算子允许重排。撤销/重做保存有界序列化快照，不保存图像副本。
+方向、镜头畸变、平面几何、弯曲网格和输出尺寸为固定位置；中间恢复算子允许重排。撤销/重做保存有界序列化快照，不保存图像副本。
+
+## 多帧边界
+
+`MultiFrameFusionParameters` 和 `align_and_fuse()` 接受多张 RGB `uint8` 图，不伪装成一元流水线算子。它位于流水线之前：先用代理图估计平移/仿射/单应逆采样矩阵，再在全分辨率上对齐，以分条 float32 计算控制峰值内存。裁切、欠曝、饱和、低饱和高亮、时域离群、局部清晰度和对齐分数共同构成观测权重。
+
+结果同时返回融合图、置信度图、从其他帧真实补回的区域和所有输入仍未解决的区域。后续单图流水线只读取融合图；Web 诊断保留上述来源语义。
 
 ## 并发
 
@@ -44,7 +51,14 @@ OpenCV / NumPy / SciPy / Pillow
 
 ## 项目格式
 
-`.screenrestore.json` 当前 `format_version` 为 1，保存应用版本、相对源图路径、SHA-256、源图尺寸、四角、比例、完整算子顺序/开关/参数、预设和模型配置。源图缺失或哈希变化会警告，但允许重新定位或继续。
+`.screenrestore.json` 当前 `format_version` 为 2，保存应用版本、相对源图路径、SHA-256、源图尺寸、镜头、四角、Mesh、比例、完整算子顺序/开关/参数、预设和模型配置。版本 2 要求算子集合完整，不保留版本 1 的双解析分支。源图缺失或哈希变化会警告，但允许重新定位或继续。
+
+## Web 安全与隐私
+
+- 默认绑定 `127.0.0.1`；非回环地址必须显式 `--allow-remote`。
+- 上传要求 `Content-Length` 和 `multipart/form-data`，限制总字节、字段数、单图像素数和同时处理任务数。
+- 前端与 API 同源，响应设置 CSP、`nosniff`、no-referrer、same-origin 和 `no-store`。
+- 上传字节与解码数组只存在于请求生命周期，不写临时上传目录；日志不记录字段内容、文件名或像素。
 
 ## 扩展新算子
 

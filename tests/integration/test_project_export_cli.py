@@ -46,6 +46,9 @@ def test_project_roundtrip_uses_relative_unicode_source(tmp_path: Path) -> None:
     loaded = load_project(saved, build_registry())
 
     raw = json.loads(saved.read_text(encoding="utf-8"))
+    assert raw["format_version"] == 2
+    operator_ids = {item["id"] for item in raw["pipeline"]["operators"]}
+    assert {"lens_distortion", "mesh_warp"}.issubset(operator_ids)
     assert not Path(raw["source"]["path"]).is_absolute()
     assert loaded.source_path == source.resolve()
     assert loaded.pipeline.state("exposure").params.to_dict()["gamma"] == 1.3

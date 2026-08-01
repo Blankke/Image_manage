@@ -14,7 +14,7 @@ from screenrestore.core.image_document import ImageDocument
 from screenrestore.core.pipeline import ImagePipeline, OperatorRegistry
 from screenrestore.core.presets import PresetId
 
-PROJECT_FORMAT_VERSION = 1
+PROJECT_FORMAT_VERSION = 2
 PROJECT_SUFFIX = ".screenrestore.json"
 
 
@@ -109,6 +109,22 @@ def load_project(path: str | Path, registry: OperatorRegistry) -> LoadedProject:
     pipeline_data = data.get("pipeline")
     if not isinstance(pipeline_data, dict):
         raise ProjectFileError("项目缺少有效流水线")
+    raw_operators = pipeline_data.get("operators")
+    if not isinstance(raw_operators, list):
+        raise ProjectFileError("项目缺少完整算子列表")
+    project_operator_ids = {
+        item.get("id") for item in raw_operators if isinstance(item, dict)
+    }
+    expected_operator_ids = set(registry.ids)
+    if project_operator_ids != expected_operator_ids:
+        missing = sorted(str(item) for item in expected_operator_ids - project_operator_ids)
+        extra = sorted(str(item) for item in project_operator_ids - expected_operator_ids)
+        details = []
+        if missing:
+            details.append(f"缺少 {', '.join(missing)}")
+        if extra:
+            details.append(f"未知 {', '.join(extra)}")
+        raise ProjectFileError("项目流水线版本不完整：" + "；".join(details))
     try:
         pipeline = ImagePipeline.from_dict(pipeline_data, registry)
         preset = PresetId(str(data.get("preset", PresetId.CUSTOM.value)))
@@ -152,4 +168,3 @@ def _normalized_project_path(path: str | Path) -> Path:
     if not str(destination).lower().endswith(PROJECT_SUFFIX):
         destination = destination.with_name(destination.name + PROJECT_SUFFIX)
     return destination
-

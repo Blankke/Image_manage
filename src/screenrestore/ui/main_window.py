@@ -610,7 +610,7 @@ class MainWindow(QMainWindow):
             if not state.operator.reorderable
         }
         if any(order[index] != operator_id for index, operator_id in fixed.items()):
-            self.statusBar().showMessage("方向、几何和输出步骤的位置固定", 4000)
+            self.statusBar().showMessage("方向、镜头、几何、网格和输出步骤的位置固定", 4000)
             self._refresh_pipeline_ui()
             return
         self.pipeline.states = [current[operator_id] for operator_id in order]

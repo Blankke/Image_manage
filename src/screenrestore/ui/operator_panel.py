@@ -69,6 +69,23 @@ PARAMETER_LABELS = {
     "gradient_threshold": "DCT 梯度阈值",
     "smoothness_lambda": "DCT 平滑项",
     "curvature_weight": "DCT 曲率项",
+    "model": "镜头模型",
+    "focal_x": "归一化焦距 X",
+    "focal_y": "归一化焦距 Y",
+    "principal_x": "归一化主点 X",
+    "principal_y": "归一化主点 Y",
+    "k1": "径向系数 k1",
+    "k2": "径向系数 k2",
+    "k3": "径向/鱼眼系数 k3",
+    "k4": "鱼眼系数 k4",
+    "p1": "切向系数 p1",
+    "p2": "切向系数 p2",
+    "optimize_camera_matrix": "优化校正视场",
+    "crop_balance": "裁切/视场平衡",
+    "crop_to_valid": "裁到有效区域",
+    "rows": "网格行数",
+    "columns": "网格列数",
+    "border_mode": "边界模式",
 }
 
 
@@ -177,7 +194,13 @@ class OperatorPanel(QWidget):
             self._form.addRow(edit_mask)
         for model_field in fields(state.params):
             name = model_field.name
-            if name in {"corners", "manual_notches", "include_polygons", "exclude_polygons"}:
+            if name in {
+                "corners",
+                "control_points",
+                "manual_notches",
+                "include_polygons",
+                "exclude_polygons",
+            }:
                 continue
             value = getattr(state.params, name)
             widget = self._make_widget(name, value)
@@ -186,6 +209,10 @@ class OperatorPanel(QWidget):
             self._form.addRow(QLabel("手工陷波点可在频谱窗口中增加或删除。"))
         if state.operator.id == "reflection":
             self._form.addRow(QLabel("大面积反光只能抑制，无法真实恢复已丢失内容。"))
+        if state.operator.id == "mesh_warp":
+            self._form.addRow(QLabel("控制网格请在 Web 工具中拖动编辑；桌面端可加载已保存项目参数。"))
+        if state.operator.id == "lens_distortion":
+            self._form.addRow(QLabel("棋盘格多图标定可在 Web 工具中完成；参数按图像宽高归一化。"))
 
     def _make_widget(self, name: str, value: Any) -> QWidget:
         if isinstance(value, bool):
@@ -252,6 +279,8 @@ def _integer_range(name: str) -> tuple[int, int]:
         "motion_length": (1, 99),
         "max_width": (1, 65535),
         "max_height": (1, 65535),
+        "rows": (2, 15),
+        "columns": (2, 15),
     }.get(name, (0, 1000))
 
 
@@ -284,5 +313,16 @@ def _float_range(name: str) -> tuple[float, float, float]:
         "notch_radius": (1.0, 50.0, 1.0),
         "notch_depth": (0.0, 1.0, 0.05),
         "heat_threshold": (0.0, 0.9, 0.05),
+        "focal_x": (0.05, 20.0, 0.01),
+        "focal_y": (0.05, 20.0, 0.01),
+        "principal_x": (0.0, 1.0, 0.005),
+        "principal_y": (0.0, 1.0, 0.005),
+        "k1": (-5.0, 5.0, 0.005),
+        "k2": (-5.0, 5.0, 0.005),
+        "k3": (-5.0, 5.0, 0.005),
+        "k4": (-5.0, 5.0, 0.005),
+        "p1": (-1.0, 1.0, 0.001),
+        "p2": (-1.0, 1.0, 0.001),
+        "crop_balance": (0.0, 1.0, 0.05),
     }
     return ranges.get(name, (-10.0, 1000.0, 0.1))
