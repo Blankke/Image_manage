@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "screenrestore"
+version = "0.1.0"
+description = "离线屏幕照片几何校正与图像恢复工具"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-python-headless>=4.9,<5",
+  "Pillow>=10.2,<13",
+  "PySide6>=6.6,<7",
+  "scipy>=1.12,<2",
+]
+
+[project.optional-dependencies]
+inference-onnx = ["onnxruntime>=1.17,<2"]
+inference-openvino = ["openvino>=2024.0"]
+dev = [
+  "hatchling>=1.25",
+  "PyInstaller>=6.6,<7",
+  "pytest>=8.1,<9",
+  "pytest-cov>=5,<7",
+  "ruff>=0.5,<1",
+]
+
+[project.scripts]
+screenrestore = "screenrestore.cli:main"
+screenrestore-gui = "screenrestore.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/screenrestore"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "gui: 需要 Qt offscreen 环境的测试",
+  "slow: 耗时较长的图像质量测试",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+

@@ -1,0 +1,24 @@
+{
+  "id": "realesrgan-general-x4v3-torch",
+  "name": "Real-ESRGAN general-x4v3 PyTorch（示例，未安装）",
+  "type": "external_process",
+  "executable": "../../.venv/Scripts/python.exe",
+  "arguments": [
+    "{manifest_dir}/../../scripts/realesrgan_torch_plugin.py",
+    "--input", "{input}",
+    "--output", "{output}",
+    "--weights", "{manifest_dir}/../weights/realesr-general-x4v3.pth",
+    "--weak-weights", "{manifest_dir}/../weights/realesr-general-wdn-x4v3.pth",
+    "--denoise-strength", "0.5",
+    "--strength", "0.65",
+    "--outscale", "2"
+  ],
+  "supports_tiling": true,
+  "required_files": [
+    "../weights/realesr-general-x4v3.pth",
+    "../weights/realesr-general-wdn-x4v3.pth"
+  ],
+  "license": "BSD-3-Clause（代码）；官方发布权重，随 Real-ESRGAN 项目分发",
+  "homepage": "https://github.com/xinntao/Real-ESRGAN",
+  "timeout_seconds": 3600
+}

@@ -1,0 +1,20 @@
+{
+  "id": "nafnet-gopro-width32-torch",
+  "name": "NAFNet GoPro width32（示例，未安装）",
+  "type": "external_process",
+  "executable": "../../.venv/Scripts/python.exe",
+  "arguments": [
+    "{manifest_dir}/../../scripts/nafnet_torch_plugin.py",
+    "--input", "{input}",
+    "--output", "{output}",
+    "--weights", "{manifest_dir}/../weights/NAFNet-GoPro-width32.pth",
+    "--width", "32",
+    "--strength", "0.65",
+    "--tile", "256"
+  ],
+  "supports_tiling": true,
+  "required_files": ["../weights/NAFNet-GoPro-width32.pth"],
+  "license": "MIT（NAFNet）/ Apache-2.0（BasicSR 部分）；官方发布权重",
+  "homepage": "https://github.com/megvii-research/NAFNet",
+  "timeout_seconds": 3600
+}

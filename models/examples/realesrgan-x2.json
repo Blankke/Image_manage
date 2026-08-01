@@ -1,0 +1,21 @@
+{
+  "id": "realesrgan-x2",
+  "name": "Real-ESRGAN x2（示例，未安装）",
+  "type": "external_process",
+  "executable": "../../plugins/realesrgan/realesrgan-ncnn-vulkan.exe",
+  "arguments": [
+    "-i", "{input}",
+    "-o", "{output}",
+    "-m", "{manifest_dir}/../../plugins/realesrgan/models",
+    "-n", "realesr-animevideov3",
+    "-s", "2"
+  ],
+  "supports_tiling": true,
+  "required_files": [
+    "../../plugins/realesrgan/models/realesr-animevideov3-x2.param",
+    "../../plugins/realesrgan/models/realesr-animevideov3-x2.bin"
+  ],
+  "license": "MIT（外部程序）；模型权重许可证需用户另行核查",
+  "homepage": "https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan",
+  "timeout_seconds": 600
+}
