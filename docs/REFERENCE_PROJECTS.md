@@ -17,6 +17,7 @@ MCNN `468b2677`、UnDeM `73cb9406`、NAFNet `2b4af71e`、Real-ESRGAN
 | [HandyView](https://github.com/xinntao/HandyView) | 图片查看、缩放与比较交互 | MIT | 仅研究交互，不复制代码 |
 | [fast-reflection-removal](https://github.com/JanPalasek/fast-reflection-removal) | 去反光插件方向 | MIT | 已移植梯度/DCT Poisson 核心并做数值、取消和依赖改造；影院预设中等强度启用，其他预设关闭，始终标为实验性 |
 | [Awesome-Demoireing](https://github.com/rebeccaeexu/Awesome-Demoireing) | 去摩尔纹论文索引 | MIT | 仅作研究索引，不复制实现 |
+| [ESDNet / UHDM](https://xinyu-andy.github.io/uhdm-page/) | 4K 屏幕照片去摩尔纹候选 | 官方论文/项目页可访问，当前未核实到可随本项目分发权重的明确许可 | 仅列入候选筛选，不复制结构、不下载或分发权重 |
 | [DDA](https://github.com/zyxxmu/DDA) | 动态计算量分配思想 | 未发现明确许可证 | 采用“热度决定局部处理强度”思想；原测试硬编码 CUDA，未复制到核心 |
 | [MoirePhotoRestoration-MCNN](https://github.com/ZhengJun-AI/MoirePhotoRestoration-MCNN) | 多尺度去摩尔纹 | MIT | 已核对网络/测试代码；缺少适合当前实拍场景的即用权重，暂不迁入 |
 | [UnDeM](https://github.com/zysxmu/UnDeM) | 摩尔纹合成与恢复 | 未发现明确许可证 | 已核对结构；本轮不引入训练依赖和数据集 |

@@ -22,6 +22,9 @@ class ModelManifest:
     required_files: list[str] = field(default_factory=list)
     model_path: str | None = None
     supports_tiling: bool = False
+    tile_size: int = 512
+    tile_overlap: int = 32
+    tile_padding: int = 16
     license: str = "UNKNOWN"
     homepage: str = ""
     timeout_seconds: float = 600.0
@@ -54,6 +57,13 @@ class ModelManifest:
         timeout = float(data.get("timeout_seconds", 600.0))
         if not 1.0 <= timeout <= 86_400:
             raise InferenceError("timeout_seconds 必须位于 1..86400")
+        tile_size = int(data.get("tile_size", 512))
+        tile_overlap = int(data.get("tile_overlap", 32))
+        tile_padding = int(data.get("tile_padding", 16))
+        if tile_size < 16 or not 0 <= tile_overlap < tile_size:
+            raise InferenceError("模型清单 tile_size/tile_overlap 无效")
+        if not 0 <= tile_padding < tile_size // 2:
+            raise InferenceError("模型清单 tile_padding 无效")
         return cls(
             id=str(data["id"]),
             name=str(data["name"]),
@@ -63,6 +73,9 @@ class ModelManifest:
             required_files=list(required_files),
             model_path=model_path,
             supports_tiling=bool(data.get("supports_tiling", False)),
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+            tile_padding=tile_padding,
             license=str(data.get("license", "UNKNOWN")),
             homepage=str(data.get("homepage", "")),
             timeout_seconds=timeout,

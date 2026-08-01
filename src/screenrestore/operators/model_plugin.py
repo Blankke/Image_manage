@@ -10,11 +10,9 @@ import numpy as np
 
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
-from screenrestore.inference.backend import InferenceBackend, InferenceError
-from screenrestore.inference.external_process import ExternalProcessBackend
+from screenrestore.inference.backend import InferenceError
+from screenrestore.inference.factory import create_inference_backend
 from screenrestore.inference.model_manifest import load_manifest
-from screenrestore.inference.onnx_backend import OnnxBackend
-from screenrestore.inference.openvino_backend import OpenVinoBackend
 
 from ._utils import require_range, require_rgb_u8
 
@@ -57,7 +55,7 @@ class ModelPluginOperator(ImageOperator[ModelPluginParameters]):
             raise InferenceError("请先在可选模型步骤中填写模型清单路径")
         manifest_path = Path(params.manifest_path).expanduser()
         manifest = load_manifest(manifest_path)
-        backend = _create_backend(manifest.type, manifest)
+        backend = create_inference_backend(manifest)
         available, reason = backend.is_available()
         if not available:
             raise InferenceError(reason)
@@ -76,13 +74,3 @@ class ModelPluginOperator(ImageOperator[ModelPluginParameters]):
             params.strength,
             0,
         )
-
-
-def _create_backend(backend_type: str, manifest) -> InferenceBackend:  # type: ignore[no-untyped-def]
-    """从已验证清单构造对应后端。"""
-
-    if backend_type == "external_process":
-        return ExternalProcessBackend(manifest)
-    if backend_type == "onnx":
-        return OnnxBackend(manifest)
-    return OpenVinoBackend(manifest)

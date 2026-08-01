@@ -1,0 +1,14 @@
+{
+  "id": "nafnet-gopro-width32-onnx-cpu",
+  "name": "NAFNet GoPro width32 ONNX CPU（示例，未转换）",
+  "type": "onnx",
+  "model_path": "../onnx/nafnet-gopro-width32.onnx",
+  "required_files": ["../onnx/nafnet-gopro-width32.onnx"],
+  "supports_tiling": true,
+  "tile_size": 256,
+  "tile_overlap": 32,
+  "tile_padding": 16,
+  "license": "MIT（NAFNet）/ Apache-2.0（BasicSR 部分）；官方发布权重",
+  "homepage": "https://github.com/megvii-research/NAFNet",
+  "timeout_seconds": 3600
+}

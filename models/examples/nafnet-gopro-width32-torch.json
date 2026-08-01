@@ -2,7 +2,7 @@
   "id": "nafnet-gopro-width32-torch",
   "name": "NAFNet GoPro width32（示例，未安装）",
   "type": "external_process",
-  "executable": "../../.venv/Scripts/python.exe",
+  "executable": "{python}",
   "arguments": [
     "{manifest_dir}/../../scripts/nafnet_torch_plugin.py",
     "--input", "{input}",

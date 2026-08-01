@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -28,7 +29,7 @@ class ExternalProcessBackend(InferenceBackend):
     def is_available(self) -> tuple[bool, str]:
         """检查清单声明的可执行程序。"""
 
-        executable = self.manifest.resolve_path(self.manifest.executable or "")
+        executable = self._resolve_executable()
         if not executable.is_file():
             return False, f"未找到外部程序：{executable}"
         for required_file in self.manifest.required_files:
@@ -45,7 +46,7 @@ class ExternalProcessBackend(InferenceBackend):
         available, reason = self.is_available()
         if not available:
             raise InferenceError(reason)
-        executable = self.manifest.resolve_path(self.manifest.executable or "")
+        executable = self._resolve_executable()
         context.cancellation.check()
         with tempfile.TemporaryDirectory(prefix="ScreenRestore-model-") as temp_directory:
             temp_root = Path(temp_directory)
@@ -103,6 +104,14 @@ class ExternalProcessBackend(InferenceBackend):
             context.metadata["external_stderr"] = stderr[-4000:]
             context.report(1.0, f"{self.manifest.name} 完成")
             return output
+
+    def _resolve_executable(self) -> Path:
+        """解析清单程序；``{python}`` 明确表示当前已激活虚拟环境解释器。"""
+
+        if self.manifest.executable == "{python}":
+            # 保留 venv 的入口路径；resolve() 会越过符号链接并丢失虚拟环境 site-packages。
+            return Path(sys.executable).absolute()
+        return self.manifest.resolve_path(self.manifest.executable or "")
 
 
 def _terminate_process(process: subprocess.Popen[str]) -> None:

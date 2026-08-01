@@ -2,7 +2,7 @@
   "id": "realesrgan-general-x4v3-torch",
   "name": "Real-ESRGAN general-x4v3 PyTorch（示例，未安装）",
   "type": "external_process",
-  "executable": "../../.venv/Scripts/python.exe",
+  "executable": "{python}",
   "arguments": [
     "{manifest_dir}/../../scripts/realesrgan_torch_plugin.py",
     "--input", "{input}",

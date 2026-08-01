@@ -20,7 +20,7 @@
 }
 ```
 
-占位符：`{input}`、`{output}`、`{temp}`、`{manifest_dir}`。参数以字符串数组传入，后端固定 `shell=False`。`{manifest_dir}` 便于清单可靠引用仓库内脚本和权重，不依赖应用启动目录。`required_files` 可列出相对清单目录的权重/参数文件，使设置页在缺权重时明确显示不可用。
+占位符：`{input}`、`{output}`、`{temp}`、`{manifest_dir}`；`executable` 还可写成 `{python}`，明确使用当前已激活虚拟环境的解释器，跨 Windows/Linux 复用同一清单。参数以字符串数组传入，后端固定 `shell=False`。`{manifest_dir}` 便于清单可靠引用仓库内脚本和权重，不依赖应用启动目录。`required_files` 可列出相对清单目录的权重/参数文件，使设置页在缺权重时明确显示不可用。
 
 ## 可复现安装
 
@@ -42,8 +42,8 @@ models/examples/realesrgan-general-x4v3-torch.json
 models/examples/realesrgan-x2.json
 ```
 
-前两个示例按 Windows `.venv\Scripts\python.exe` 配置；Linux/WSL 验证时把清单的
-`executable` 改为 `../../.venv/bin/python`。
+前两个 PyTorch 示例使用 `{python}`，会保持当前虚拟环境入口，不再需要为 Windows
+和 Linux 维护两套清单。
 
 ## NAFNet 与 Real-ESRGAN PyTorch 插件
 
@@ -83,7 +83,42 @@ python scripts/realesrgan_torch_plugin.py --input input.png --output realesrgan.
 python -m pip install -e ".[inference-onnx]"
 ```
 
-清单使用 `"type": "onnx"` 和 `"model_path": "model.onnx"`。当前通用骨架面向单输入 NCHW RGB 图像到图像模型；特殊归一化、多输入或动态输出模型需要专用适配器。
+清单使用 `"type": "onnx"` 和 `"model_path": "model.onnx"`。当前通用骨架面向单输入 NCHW RGB 图像到图像模型；特殊归一化、多输入或动态输出模型需要专用适配器。清单可用 `supports_tiling`、`tile_size`、`tile_overlap` 和 `tile_padding` 启用 ONNX CPU 分块融合；这些字段已经接入实际后端，不只是说明信息。
+
+### NAFNet 转 ONNX CPU
+
+转换器不下载权重，读取已有官方 NAFNet 权重，输出动态分辨率 ONNX、SHA-256、数值核对结果和可直接加载的清单：
+
+```bash
+source .venv/bin/activate
+which python
+python -m pip install -e ".[inference-onnx]"
+python -m pip install onnx
+python scripts/export_nafnet_onnx.py \
+  --weights models/weights/NAFNet-GoPro-width32.pth \
+  --output models/onnx/nafnet-gopro-width32.onnx \
+  --manifest models/manifests/nafnet-gopro-width32-onnx.json
+```
+
+`--verify` 默认开启，会用随机动态尺寸输入比较 PyTorch 与 ONNX Runtime，最大绝对误差超过 `2e-3` 时拒绝生成可用清单。本次环境已有权重与 PyTorch，但没有 `onnx`/`onnxruntime`，因此已完成并测试转换脚本、清单和实际 ONNX tile 后端，未虚构转换成功产物。
+
+### 屏幕领域候选筛选
+
+任何本地外部/ONNX/OpenVINO 清单都可进入同一合成筛选：
+
+```bash
+source .venv/bin/activate
+which python
+python scripts/screen_model_plugins.py \
+  --manifest models/examples/nafnet-gopro-width32-torch.json \
+  --output validation_outputs/model_screening.json \
+  --task all \
+  --preview-directory validation_outputs/model_screening_previews
+```
+
+筛选包含彩色摩尔纹、运动模糊、失焦和干净输入保护，记录 PSNR 改善、MAE、梯度误差、耗时和淘汰原因。它只做第一轮定量淘汰，入选项仍须在独立实拍图上复验。
+
+本轮对本地 NAFNet GoPro width32 做了去模糊筛选：运动模糊 PSNR 变化约 `-0.041 dB`，失焦约 `-0.158 dB`，干净合成屏幕 MAE 为 `70.83/255`，判定为 `reject_clean_content_drift`。因此没有把它升级成默认“屏幕领域权重”；这比仅凭通用 GoPro 指标宣称适配更可靠。去摩尔纹候选仓库中，当前没有同时满足“本地已有可核验权重、明确可分发许可、结构已适配”的模型，所以保留经典去摩尔纹为默认，并让后续合法候选直接进入同一筛选流程。
 
 ## OpenVINO
 

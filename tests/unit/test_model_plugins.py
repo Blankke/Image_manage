@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from threading import Timer
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from screenrestore.core.cancellation import CancellationToken, ProcessingCancell
 from screenrestore.core.operator import ProcessingContext
 from screenrestore.inference.external_process import ExternalProcessBackend
 from screenrestore.inference.model_manifest import ModelManifest, discover_manifests, load_manifest
+from screenrestore.inference.onnx_backend import OnnxBackend
 
 
 def test_manifest_roundtrip_and_discovery(tmp_path: Path) -> None:
@@ -97,6 +99,20 @@ def test_external_process_reports_missing_required_weight(tmp_path: Path) -> Non
     assert "not-installed.pth" in reason
 
 
+def test_external_process_python_placeholder_uses_active_venv() -> None:
+    manifest = ModelManifest.from_dict(
+        {
+            "id": "active-python",
+            "name": "Active Python",
+            "type": "external_process",
+            "executable": "{python}",
+        }
+    )
+    available, reason = ExternalProcessBackend(manifest).is_available()
+    assert available
+    assert Path(reason) == Path(sys.executable).absolute()
+
+
 def test_external_process_can_be_cancelled() -> None:
     manifest = ModelManifest.from_dict(
         {
@@ -119,3 +135,47 @@ def test_external_process_can_be_cancelled() -> None:
             )
     finally:
         timer.cancel()
+
+
+def test_onnx_manifest_tiling_runs_identity_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    model_path = tmp_path / "identity.onnx"
+    model_path.write_bytes(b"test-placeholder")
+
+    class IdentitySession:
+        def __init__(self, path: str, providers: list[str]) -> None:
+            assert path == str(model_path)
+            assert providers == ["CPUExecutionProvider"]
+
+        def get_inputs(self):  # type: ignore[no-untyped-def]
+            return [SimpleNamespace(name="input")]
+
+        def run(self, outputs, feed):  # type: ignore[no-untyped-def]
+            del outputs
+            return [feed["input"]]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(InferenceSession=IdentitySession),
+    )
+    manifest = ModelManifest.from_dict(
+        {
+            "id": "identity-onnx",
+            "name": "Identity ONNX",
+            "type": "onnx",
+            "model_path": str(model_path),
+            "supports_tiling": True,
+            "tile_size": 32,
+            "tile_overlap": 8,
+            "tile_padding": 4,
+        }
+    )
+    yy, xx = np.indices((43, 61))
+    image = np.stack(((xx * 3) % 256, (yy * 5) % 256, (xx + yy) % 256), axis=2).astype(
+        np.uint8
+    )
+    restored = OnnxBackend(manifest).run(image, ProcessingContext())
+    assert np.array_equal(restored, image)

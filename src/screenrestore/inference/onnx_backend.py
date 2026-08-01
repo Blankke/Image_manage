@@ -8,6 +8,7 @@ from screenrestore.core.operator import ProcessingContext
 
 from .backend import InferenceBackend, InferenceError
 from .model_manifest import ModelManifest
+from .tiled_inference import tiled_inference
 
 
 class OnnxBackend(InferenceBackend):
@@ -38,6 +39,20 @@ class OnnxBackend(InferenceBackend):
         if not available:
             raise InferenceError(reason)
         context.cancellation.check()
+        if self.manifest.supports_tiling:
+            return tiled_inference(
+                image_rgb,
+                self._run_once,
+                context,
+                tile_size=self.manifest.tile_size,
+                overlap=self.manifest.tile_overlap,
+                padding=self.manifest.tile_padding,
+            )
+        return self._run_once(image_rgb)
+
+    def _run_once(self, image_rgb: np.ndarray) -> np.ndarray:
+        """运行单张或单个 tile；会话在首次调用时惰性创建并复用。"""
+
         try:
             import onnxruntime as ort
 
@@ -51,7 +66,6 @@ class OnnxBackend(InferenceBackend):
             output = self._session.run(None, {input_name: tensor})[0]
         except Exception as exc:  # noqa: BLE001 - 可选运行时错误统一转换
             raise InferenceError(f"ONNX 推理失败：{exc}") from exc
-        context.cancellation.check()
         return _tensor_to_rgb(output)
 
 
@@ -69,4 +83,3 @@ def _tensor_to_rgb(output: np.ndarray) -> np.ndarray:
     if np.issubdtype(output.dtype, np.floating):
         output = output * 255.0
     return np.clip(np.rint(output), 0, 255).astype(np.uint8)
-

@@ -68,11 +68,13 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 - 许可证：NAFNet 部分为 MIT，Copyright (c) 2022 megvii-model；其 `arch_util.py`
   同时携带 BasicSR 的 Apache-2.0 声明，Copyright 2018-2020 BasicSR Authors。
 - 许可证全文：https://github.com/megvii-research/NAFNet/blob/2b4af71ebe098a92a75910c233a3965a3e93ede4/LICENSE
-- 本项目文件：`scripts/nafnet_torch_plugin.py`、
-  `models/examples/nafnet-gopro-width32-torch.json`。
+- 本项目文件：`scripts/nafnet_torch_plugin.py`、`scripts/export_nafnet_onnx.py`、
+  `models/examples/nafnet-gopro-width32-torch.json`、
+  `models/examples/nafnet-gopro-width32-onnx.json`。
 - 使用与修改：移植 width32/64 NAFNet 推理结构；去除 BasicSR、训练和 CUDA 依赖；
   用纯推理 LayerNorm 代替自定义反向传播；加入本地权重、CPU、通用加权 tile、中文
-  路径、终端进度与有限强度混合。
+  路径、终端进度与有限强度混合；ONNX 转换器复用该已记录结构导出用户本地
+  权重，不另行复制上游实现。
 - 权重：安装脚本可从上游 README 指向的官方 Google Drive 下载
   `NAFNet-GoPro-width32.pth` 并校验 SHA-256。权重和 PyTorch 不进入核心包。
 
