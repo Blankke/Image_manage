@@ -11,7 +11,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class ResizeMode(StrEnum):
@@ -54,7 +54,7 @@ class ResizeOperator(ImageOperator[ResizeParameters]):
         params: ResizeParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.mode == ResizeMode.ORIGINAL:
             return image.copy()
@@ -66,9 +66,8 @@ class ResizeOperator(ImageOperator[ResizeParameters]):
         if abs(scale - 1.0) < 1e-6:
             return image.copy()
         interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LANCZOS4
-        return cv2.resize(
+        return clip_float(cv2.resize(
             image,
             (max(1, round(width * scale)), max(1, round(height * scale))),
             interpolation=interpolation,
-        )
-
+        ))

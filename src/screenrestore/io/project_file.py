@@ -14,7 +14,7 @@ from screenrestore.core.image_document import ImageDocument
 from screenrestore.core.pipeline import ImagePipeline, OperatorRegistry
 from screenrestore.core.presets import PresetId
 
-PROJECT_FORMAT_VERSION = 2
+PROJECT_FORMAT_VERSION = 4
 PROJECT_SUFFIX = ".screenrestore.json"
 
 

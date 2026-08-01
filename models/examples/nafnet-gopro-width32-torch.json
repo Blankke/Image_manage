@@ -1,7 +1,9 @@
 {
   "id": "nafnet-gopro-width32-torch",
-  "name": "NAFNet GoPro width32（示例，未安装）",
+  "name": "NAFNet GoPro width32（可选本地模型）",
   "type": "external_process",
+  "role": "restoration",
+  "task": "deblur",
   "executable": "{python}",
   "arguments": [
     "{manifest_dir}/../../scripts/nafnet_torch_plugin.py",
@@ -9,7 +11,7 @@
     "--output", "{output}",
     "--weights", "{manifest_dir}/../weights/NAFNet-GoPro-width32.pth",
     "--width", "32",
-    "--strength", "0.65",
+    "--strength", "{model_strength}",
     "--tile", "256"
   ],
   "supports_tiling": true,

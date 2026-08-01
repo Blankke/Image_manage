@@ -77,6 +77,9 @@ class ScreenRestoreRequestHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/v1/models":
+            self._send_json(HTTPStatus.OK, self.server.restore_service.models())
+            return
         route = STATIC_ROUTES.get(path)
         if route is None:
             self._send_error(HTTPStatus.NOT_FOUND, "资源不存在")
@@ -207,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-remote", action="store_true", help="明确允许非回环地址")
     parser.add_argument("--max-upload-mb", type=int, default=256, help="单次请求上限 MiB")
     parser.add_argument("--max-jobs", type=int, default=2, help="最大并行处理任务数")
+    parser.add_argument(
+        "--model-directory",
+        action="append",
+        default=None,
+        help="允许 Web 发现模型清单的目录；可重复，浏览器只能提交其中的模型 ID",
+    )
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -217,6 +226,7 @@ def create_server(
     *,
     max_upload_mb: int = 256,
     max_jobs: int = 2,
+    model_directories: list[str | Path] | None = None,
 ) -> ScreenRestoreHTTPServer:
     """创建可由测试或命令行控制生命周期的服务实例。"""
 
@@ -226,6 +236,7 @@ def create_server(
         raise ValueError("上传上限必须大于 0")
     return ScreenRestoreHTTPServer(
         (host, port),
+        service=WebRestoreService(model_directories=model_directories),
         max_body_bytes=max_upload_mb * 1024 * 1024,
         max_concurrent_jobs=max_jobs,
     )
@@ -243,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         args.port,
         max_upload_mb=args.max_upload_mb,
         max_jobs=args.max_jobs,
+        model_directories=args.model_directory,
     )
     actual_host, actual_port = server.server_address[:2]
     display_host = "127.0.0.1" if actual_host in {"0.0.0.0", "::"} else actual_host

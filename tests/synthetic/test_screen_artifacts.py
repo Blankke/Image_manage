@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-from tests.synthetic.generators import add_banding, add_color_moire, smooth_texture
 
 from screenrestore.core.operator import ProcessingContext
 from screenrestore.operators.banding import (
@@ -18,10 +17,19 @@ from screenrestore.operators.demoire import (
     frequency_spectrum,
     moire_heatmap,
 )
+from tests.synthetic.generators import add_banding, add_color_moire, smooth_texture
 
 
 def _mae(first: np.ndarray, second: np.ndarray) -> float:
-    return float(np.mean(np.abs(first.astype(np.float32) - second.astype(np.float32))))
+    first_float = first.astype(np.float32) / (255.0 if first.dtype == np.uint8 else 1.0)
+    second_float = second.astype(np.float32) / (255.0 if second.dtype == np.uint8 else 1.0)
+    return float(np.mean(np.abs(first_float - second_float)))
+
+
+def _working(image: np.ndarray) -> np.ndarray:
+    """把合成器的 uint8 输出送入 float32 算子契约。"""
+
+    return image.astype(np.float32) / 255.0
 
 
 def test_horizontal_banding_correction_reduces_error() -> None:
@@ -29,7 +37,7 @@ def test_horizontal_banding_correction_reduces_error() -> None:
     degraded = add_banding(clean, "horizontal")
     context = ProcessingContext()
     corrected = BandingOperator().apply(
-        degraded,
+        _working(degraded),
         BandingParameters(
             direction=BandingDirection.AUTO,
             smooth_scale=34,
@@ -48,7 +56,7 @@ def test_vertical_banding_correction_reduces_error() -> None:
     clean = smooth_texture()
     degraded = add_banding(clean, "vertical")
     corrected = BandingOperator().apply(
-        degraded,
+        _working(degraded),
         BandingParameters(
             direction=BandingDirection.AUTO,
             smooth_scale=34,
@@ -74,7 +82,7 @@ def test_broad_haze_correction_lowers_additive_veil_error() -> None:
     )
     degraded_u8 = np.rint(degraded * 255.0).astype(np.uint8)
     corrected = BandingOperator().apply(
-        degraded_u8,
+        _working(degraded_u8),
         BandingParameters(
             strength=0.0,
             broad_haze_strength=1.6,
@@ -90,9 +98,9 @@ def test_broad_haze_correction_lowers_additive_veil_error() -> None:
 def test_chroma_demoire_reduces_synthetic_color_error() -> None:
     clean = smooth_texture()
     degraded = add_color_moire(clean)
-    heat = moire_heatmap(degraded)
+    heat = moire_heatmap(_working(degraded))
     corrected = DemoireOperator().apply(
-        degraded,
+        _working(degraded),
         DemoireParameters(
             mode=DemoireMode.CHROMA,
             strength=0.9,
@@ -107,7 +115,36 @@ def test_chroma_demoire_reduces_synthetic_color_error() -> None:
     assert _mae(corrected, clean) < _mae(degraded, clean)
 
 
+def test_joint_demoire_reduces_luminance_grid_and_preserves_hard_edge() -> None:
+    height, width = 120, 180
+    clean = np.full((height, width, 3), 0.25, np.float32)
+    clean[:, width // 2 :] = 0.72
+    xx = np.arange(width, dtype=np.float32)[None, :, None]
+    grid = 0.045 * np.sin(2.0 * np.pi * xx / 3.4)
+    degraded = np.clip(clean + grid, 0.0, 1.0).astype(np.float32)
+    context = ProcessingContext()
+    corrected = DemoireOperator().apply(
+        degraded,
+        DemoireParameters(
+            mode=DemoireMode.JOINT_EDGE_AWARE,
+            strength=1.0,
+            chroma_radius=2.5,
+            edge_protection=0.65,
+        ),
+        context,
+    )
+    flat_mask = np.ones((height, width), dtype=bool)
+    flat_mask[:, width // 2 - 8 : width // 2 + 8] = False
+    before_error = np.mean(np.abs(degraded - clean), axis=2)[flat_mask].mean()
+    after_error = np.mean(np.abs(corrected - clean), axis=2)[flat_mask].mean()
+    assert float(after_error) < float(before_error) * 0.8
+    before_step = float(degraded[:, width // 2 + 4].mean() - degraded[:, width // 2 - 4].mean())
+    after_step = float(corrected[:, width // 2 + 4].mean() - corrected[:, width // 2 - 4].mean())
+    assert after_step > before_step * 0.9
+    assert context.metadata["demoire"]["mode"] == "joint_edge_aware"
+
+
 def test_frequency_spectrum_has_rgb_display_contract() -> None:
-    spectrum = frequency_spectrum(add_color_moire(smooth_texture(180, 120)))
+    spectrum = frequency_spectrum(_working(add_color_moire(smooth_texture(180, 120))))
     assert spectrum.shape == (120, 180, 3)
     assert spectrum.dtype == np.uint8

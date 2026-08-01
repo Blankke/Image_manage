@@ -19,7 +19,7 @@ def test_gradient_dct_mode_preserves_contract_and_reduces_soft_halo() -> None:
     image[24:76, 36:112] = (80, 125, 170)
     yy, xx = np.indices((height, width), dtype=np.float32)
     halo = 52.0 * np.exp(-0.5 * (np.square((xx - 72) / 31) + np.square((yy - 47) / 20)))
-    degraded = np.clip(image + halo[..., None], 0, 255).astype(np.uint8)
+    degraded = np.clip(image + halo[..., None], 0, 255).astype(np.float32) / 255.0
     result = ReflectionOperator().apply(
         degraded,
         ReflectionParameters(
@@ -29,11 +29,11 @@ def test_gradient_dct_mode_preserves_contract_and_reduces_soft_halo() -> None:
         ),
         ProcessingContext(),
     )
-    assert result.dtype == np.uint8
+    assert result.dtype == np.float32
     assert result.shape == degraded.shape
-    source_gray = cv2.cvtColor(degraded, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    result_gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    source_gray = cv2.cvtColor(degraded, cv2.COLOR_RGB2GRAY)
+    result_gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY)
     source_background_spread = float(source_gray[:20].std())
     result_background_spread = float(result_gray[:20].std())
     assert result_background_spread < source_background_spread
-    assert float(result_gray[50, 110] - result_gray[50, 115]) > 8.0
+    assert float(result_gray[50, 110] - result_gray[50, 115]) > 8.0 / 255.0

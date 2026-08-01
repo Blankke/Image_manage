@@ -184,14 +184,15 @@ def main(argv: list[str] | None = None) -> int:
     model.load_state_dict(parameters, strict=True)
     model.eval()
     with Image.open(args.input) as opened:
-        source = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
+        source_u8 = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
+    source = source_u8.astype(np.float32) / 255.0
 
     def infer_tile(tile_rgb: np.ndarray) -> np.ndarray:
         tensor = torch.from_numpy(np.transpose(tile_rgb, (2, 0, 1)).copy()).float()
-        tensor = tensor.unsqueeze(0) / 255.0
+        tensor = tensor.unsqueeze(0)
         with torch.inference_mode():
             inferred = model(tensor).squeeze(0).clamp_(0.0, 1.0)
-            array = inferred.mul(255.0).round().to(torch.uint8).cpu().numpy()
+            array = inferred.cpu().numpy().astype(np.float32, copy=False)
         return np.transpose(array, (1, 2, 0)).copy()
 
     context = ProcessingContext(
@@ -208,16 +209,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.strength < 1.0:
         restored = np.clip(
-            np.rint(
-                source.astype(np.float32) * (1.0 - args.strength)
-                + restored.astype(np.float32) * args.strength
-            ),
-            0,
-            255,
-        ).astype(np.uint8)
+            source * (1.0 - args.strength) + restored * args.strength,
+            0.0,
+            1.0,
+        )
+    restored_u8 = np.clip(np.rint(restored * 255.0), 0, 255).astype(np.uint8)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_name(f".{args.output.stem}.tmp{args.output.suffix}")
-    Image.fromarray(restored, "RGB").save(temporary)
+    Image.fromarray(restored_u8, "RGB").save(temporary)
     temporary.replace(args.output)
     _print_progress(1.0, f"完成：{args.output}")
     return 0

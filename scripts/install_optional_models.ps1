@@ -79,7 +79,7 @@ try {
         Expand-Archive -Path $Archive -DestinationPath $PluginDirectory -Force
         Remove-Item -LiteralPath $Archive -Force
     }
-    Write-Host "可选模型安装完成；请在应用的‘可选模型恢复/超分’步骤填写 models/examples 下的清单路径。"
+    Write-Host "可选模型安装完成；请在应用对应的‘AI 恢复模型’或‘AI 感知增强’步骤填写 models/examples 下的清单路径。"
 }
 finally {
     Pop-Location

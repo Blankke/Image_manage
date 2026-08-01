@@ -11,7 +11,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class IlluminationEstimator(StrEnum):
@@ -62,12 +62,12 @@ class IlluminationOperator(ImageOperator[IlluminationParameters]):
         params: IlluminationParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.strength == 0:
             return image.copy()
         lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        lightness = lab[..., 0].astype(np.float32) / 255.0
+        lightness = lab[..., 0] / 100.0
         context.report(0.15, "估计低频照明场")
         if params.estimator == IlluminationEstimator.GAUSSIAN:
             field = cv2.GaussianBlur(lightness, (0, 0), params.radius / 3.0)
@@ -86,11 +86,10 @@ class IlluminationOperator(ImageOperator[IlluminationParameters]):
         mix = params.strength * shadow_protection
         output_lightness = lightness * (1.0 - mix) + corrected * mix
         output_lab = lab.copy()
-        output_lab[..., 0] = np.clip(np.rint(output_lightness * 255), 0, 255).astype(np.uint8)
+        output_lab[..., 0] = np.clip(output_lightness * 100.0, 0.0, 100.0)
         if params.show_field:
             context.metadata["illumination_field"] = np.clip(
                 cv2.resize(field, (min(512, field.shape[1]), min(512, field.shape[0]))), 0, 1
             )
         context.report(1.0, "光照校正完成")
-        return cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB)
-
+        return clip_float(cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB))

@@ -7,10 +7,11 @@ from enum import StrEnum
 
 import numpy as np
 
+from screenrestore.core.color import linear_to_srgb, srgb_to_linear
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, to_float, to_uint8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class WhiteBalanceMode(StrEnum):
@@ -66,10 +67,11 @@ class WhiteBalanceOperator(ImageOperator[WhiteBalanceParameters]):
         context: ProcessingContext,
     ) -> np.ndarray:
         self.validate(params)
-        source = to_float(image)
+        require_rgb_float(image)
         context.cancellation.check()
         if params.mode == WhiteBalanceMode.OFF or params.strength == 0:
             return image.copy()
+        source = srgb_to_linear(image)
         if params.mode == WhiteBalanceMode.GRAY_WORLD:
             reference = np.mean(source, axis=(0, 1))
             target = float(np.mean(reference))
@@ -93,5 +95,4 @@ class WhiteBalanceOperator(ImageOperator[WhiteBalanceParameters]):
         balanced = np.clip(source * gains.reshape(1, 1, 3), 0.0, 1.0)
         result = source * (1.0 - params.strength) + balanced * params.strength
         context.metadata["white_balance_gains"] = gains.tolist()
-        return to_uint8(result)
-
+        return clip_float(linear_to_srgb(result))

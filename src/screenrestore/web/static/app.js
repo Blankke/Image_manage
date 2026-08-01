@@ -9,6 +9,12 @@ const state = {
   resultImage: null,
   resultUrl: null,
   resultBlob: null,
+  results: {},
+  resultUrls: {},
+  resultBlobs: {},
+  resultDiagnostics: {},
+  activeResult: "fidelity",
+  actualPixels: false,
   mode: "corners",
   corners: [[0.04, 0.04], [0.96, 0.04], [0.96, 0.96], [0.04, 0.96]],
   mesh: [],
@@ -38,6 +44,11 @@ function setBusy(busy, message) {
 }
 
 function updateFiles(files) {
+  Object.values(state.resultUrls).forEach((url) => URL.revokeObjectURL(url));
+  state.results = {}; state.resultUrls = {}; state.resultBlobs = {}; state.resultDiagnostics = {};
+  state.resultImage = null; state.resultUrl = null; state.resultBlob = null;
+  byId("resultToolbar").classList.add("hidden");
+  byId("downloadButton").disabled = true;
   state.files = Array.from(files).slice(0, 20);
   const summary = byId("fileSummary");
   summary.replaceChildren();
@@ -78,23 +89,83 @@ function loadSourceImage(file) {
 }
 
 function displayedImage() {
-  if (state.mode === "result" && state.resultImage) return state.resultImage;
+  if (state.mode === "result") return resultByName(state.activeResult);
   if (state.mode === "mesh" && state.resultImage) return state.resultImage;
   if (state.mode === "corners" && state.geometryImage) return state.geometryImage;
   return state.sourceImage;
 }
 
+function resultByName(name) {
+  if (name === "original") return state.sourceImage;
+  return state.results[name] || null;
+}
+
 function drawCanvas() {
   const image = displayedImage();
   if (!image) return;
+  if (state.mode === "result" && byId("comparisonMode").value !== "single" && state.results.geometry) {
+    drawComparisonCanvas();
+    return;
+  }
   const maxWidth = 1200;
   const maxHeight = 820;
-  const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+  const scale = state.actualPixels ? 1 : Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
   canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
   if (state.mode === "corners") drawCorners();
   if (state.mode === "mesh") drawMesh();
+}
+
+function drawComparisonCanvas() {
+  let baseline = state.results.geometry;
+  let compared = state.results.fidelity;
+  let baselineLabel = "Geometry";
+  let comparedLabel = "Fidelity";
+  if (state.activeResult === "original" || state.activeResult === "geometry") {
+    baseline = state.sourceImage;
+    compared = state.results.geometry;
+    baselineLabel = "Original";
+    comparedLabel = "Geometry";
+  } else if (state.activeResult === "ai") {
+    baseline = state.results.fidelity || state.results.geometry;
+    compared = state.results.ai;
+    baselineLabel = state.results.fidelity ? "Fidelity" : "Geometry";
+    comparedLabel = "AI Enhanced";
+  }
+  if (!baseline || !compared) return;
+  const comparisonMode = byId("comparisonMode").value;
+  const maxWidth = 1200;
+  const maxHeight = 820;
+  const sideFactor = comparisonMode === "side" ? 2 : 1;
+  const scale = state.actualPixels ? 1 : Math.min(1, maxWidth / (compared.naturalWidth * sideFactor), maxHeight / compared.naturalHeight);
+  const width = Math.max(1, Math.round(compared.naturalWidth * scale));
+  const height = Math.max(1, Math.round(compared.naturalHeight * scale));
+  canvas.width = width * sideFactor;
+  canvas.height = height;
+  if (comparisonMode === "side") {
+    context.drawImage(baseline, 0, 0, width, height);
+    context.drawImage(compared, width, 0, width, height);
+    drawLabel(baselineLabel, 12, 24);
+    drawLabel(comparedLabel, width + 12, 24);
+    return;
+  }
+  context.drawImage(baseline, 0, 0, width, height);
+  const split = numberValue("splitPosition");
+  context.save();
+  context.beginPath(); context.rect(0, 0, width * split, height); context.clip();
+  context.drawImage(compared, 0, 0, width, height);
+  context.restore();
+  context.strokeStyle = "#e8ff47"; context.lineWidth = 2;
+  context.beginPath(); context.moveTo(width * split, 0); context.lineTo(width * split, height); context.stroke();
+  drawLabel(comparedLabel, 12, 24);
+  drawLabel(baselineLabel, Math.max(12, width - 104), 24);
+}
+
+function drawLabel(label, x, y) {
+  context.font = "700 11px ui-monospace";
+  context.fillStyle = "rgba(0,0,0,.72)"; context.fillRect(x - 6, y - 16, context.measureText(label).width + 12, 22);
+  context.fillStyle = "#e8ff47"; context.fillText(label, x, y);
 }
 
 function drawCorners() {
@@ -230,9 +301,58 @@ function lensSettings() {
   };
 }
 
-function restoreSettings() {
+function aiSettings(enabled) {
+  return {
+    enabled,
+    manifest_id: byId("aiModel").value,
+    strength: numberValue("aiStrength"),
+    denoise_strength: numberValue("aiDenoise"),
+    output_scale: numberValue("aiOutscale"),
+    blend_strength: 1,
+  };
+}
+
+function artifactOverrides() {
+  const overrides = {};
+  const demoirePolicy = byId("demoirePolicy").value;
+  if (demoirePolicy === "off") {
+    overrides.demoire = { enabled: false };
+  } else if (demoirePolicy === "strong") {
+    overrides.demoire = {
+      enabled: true,
+      params: {
+        mode: "joint_edge_aware", strength: 1, chroma_radius: 3.2,
+        luma_sigma_color: 0.08, edge_protection: 0.65,
+        chroma_relative_strength: 0.8, minimum_filter_weight: 0.45,
+      },
+    };
+  }
+
+  const dehaloPolicy = byId("dehaloPolicy").value;
+  if (dehaloPolicy === "off") {
+    overrides.dehalo = { enabled: false };
+  } else if (dehaloPolicy === "gated") {
+    overrides.dehalo = { enabled: true, params: { auto_gate: true } };
+  } else if (dehaloPolicy === "strong") {
+    overrides.dehalo = {
+      enabled: true,
+      params: {
+        auto_gate: true, strength: 0.5, max_correction: 0.1,
+        max_scene_median: 0.45, max_highlight_area: 0.35,
+      },
+    };
+  }
+  return overrides;
+}
+
+function restoreSettings(outputVariant = "fidelity") {
+  const aiEnabled = outputVariant === "ai_enhanced";
   const settings = {
     preset: byId("preset").value,
+    processing_mode: aiEnabled ? "ai_enhanced" : "fidelity",
+    output_variant: outputVariant,
+    ai: aiSettings(aiEnabled),
+    operator_overrides: artifactOverrides(),
     corners: state.corners,
     ratio_mode: byId("ratioMode").value,
     custom_ratio: numberValue("customRatio"),
@@ -298,30 +418,76 @@ function decodeDiagnostics(value) {
 
 async function restore() {
   if (!state.files.length) return;
-  setBusy(true, state.files.length > 1 ? "正在对齐并融合真实观测" : "正在运行恢复流水线");
+  const wantsAi = byId("processingMode").value === "ai_enhanced";
+  if (wantsAi && !byId("aiModel").value) {
+    setStatus("AI Enhanced 模式尚未选择可用本地模型", "", 0);
+    return;
+  }
+  setBusy(true, state.files.length > 1 ? "正在对齐并融合真实观测" : "正在生成分阶段对比");
   byId("downloadButton").disabled = true;
-  const form = new FormData();
-  state.files.forEach((file) => form.append("files", file, file.name));
-  form.append("settings", JSON.stringify(restoreSettings()));
+  Object.values(state.resultUrls).forEach((url) => URL.revokeObjectURL(url));
+  state.results = {}; state.resultUrls = {}; state.resultBlobs = {}; state.resultDiagnostics = {};
   try {
-    const response = await fetch("/api/v1/restore", { method: "POST", body: form });
-    if (!response.ok) throw new Error(await apiError(response));
-    const blob = await response.blob();
-    if (state.resultUrl) URL.revokeObjectURL(state.resultUrl);
-    state.resultBlob = blob;
-    state.resultUrl = URL.createObjectURL(blob);
-    const image = new Image();
-    await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = state.resultUrl; });
-    state.resultImage = image;
-    const diagnostics = decodeDiagnostics(response.headers.get("X-ScreenRestore-Diagnostics"));
-    byId("diagnostics").textContent = JSON.stringify(diagnostics, null, 2);
+    await requestVariant("geometry");
+    setStatus("几何结果完成，正在忠实恢复", "busy", 48);
+    await requestVariant("fidelity");
+    if (wantsAi) {
+      setStatus("忠实恢复完成，正在运行本地 AI 增强", "busy", 78);
+      await requestVariant("ai_enhanced");
+    }
+    state.activeResult = wantsAi ? "ai" : "fidelity";
+    state.resultImage = resultByName(state.activeResult);
+    state.resultBlob = state.resultBlobs[state.activeResult];
+    state.resultUrl = state.resultUrls[state.activeResult];
+    byId("diagnostics").textContent = JSON.stringify(state.resultDiagnostics[state.activeResult], null, 2);
     byId("downloadButton").disabled = false;
+    byId("resultToolbar").classList.remove("hidden");
+    const aiTab = document.querySelector('[data-result="ai"]');
+    aiTab.disabled = !state.results.ai;
+    selectResult(state.activeResult);
     changeMode("result");
-    setStatus(`恢复完成 · ${image.naturalWidth}×${image.naturalHeight}`, "ready", 100);
+    const image = state.resultImage;
+    setStatus(`分阶段结果完成 · ${image.naturalWidth}×${image.naturalHeight}`, "ready", 100);
   } catch (error) {
     setStatus(error.message || "恢复失败", "", 0);
     byId("diagnostics").textContent = String(error.stack || error);
   } finally { setBusy(false, ""); }
+}
+
+async function requestVariant(variant) {
+  const form = new FormData();
+  state.files.forEach((file) => form.append("files", file, file.name));
+  form.append("settings", JSON.stringify(restoreSettings(variant)));
+  const response = await fetch("/api/v1/restore", { method: "POST", body: form });
+  if (!response.ok) throw new Error(await apiError(response));
+  const blob = await response.blob();
+  const key = variant === "ai_enhanced" ? "ai" : variant;
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  await new Promise((resolve, reject) => { image.onload = resolve; image.onerror = reject; image.src = url; });
+  state.results[key] = image;
+  state.resultUrls[key] = url;
+  state.resultBlobs[key] = blob;
+  state.resultDiagnostics[key] = decodeDiagnostics(response.headers.get("X-ScreenRestore-Diagnostics"));
+}
+
+function selectResult(name) {
+  if (!resultByName(name)) return;
+  state.activeResult = name;
+  state.resultImage = resultByName(name);
+  if (name !== "original") {
+    state.resultBlob = state.resultBlobs[name];
+    state.resultUrl = state.resultUrls[name];
+    byId("diagnostics").textContent = JSON.stringify(state.resultDiagnostics[name], null, 2);
+    byId("downloadButton").disabled = false;
+  } else {
+    state.resultBlob = null;
+    state.resultUrl = null;
+    byId("downloadButton").disabled = true;
+    byId("diagnostics").textContent = "Original 为只读输入；请选择 Geometry、Fidelity 或 AI Enhanced 查看对应诊断。";
+  }
+  document.querySelectorAll("[data-result]").forEach((button) => button.classList.toggle("active", button.dataset.result === name));
+  drawCanvas();
 }
 
 async function calibrate() {
@@ -354,8 +520,49 @@ function downloadResult() {
   const link = document.createElement("a");
   const baseName = state.files[0]?.name.replace(/\.[^.]+$/, "") || "screenrestore";
   link.href = state.resultUrl;
-  link.download = `${baseName}_恢复.png`;
+  const labels = { geometry: "几何", fidelity: "忠实恢复", ai: "AI增强" };
+  link.download = `${baseName}_${labels[state.activeResult] || "恢复"}.png`;
   link.click();
+}
+
+async function loadModels() {
+  const select = byId("aiModel");
+  select.replaceChildren();
+  try {
+    const response = await fetch("/api/v1/models");
+    if (!response.ok) throw new Error(await apiError(response));
+    const payload = await response.json();
+    const models = (payload.models || []).filter((model) => model.role === "enhancement");
+    models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.available ? model.id : "";
+      option.disabled = !model.available;
+      option.textContent = `${model.name} · ${model.task}${model.available ? "" : `（不可用：${model.status}）`}`;
+      select.append(option);
+    });
+    const firstAvailable = models.find((model) => model.available);
+    if (firstAvailable) {
+      select.value = firstAvailable.id;
+      setStatus(`已发现本地 AI 模型：${firstAvailable.name}`, "ready", 0);
+    } else {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = models.length ? "增强模型均不可用" : "未发现增强模型";
+      select.prepend(option);
+      select.value = "";
+    }
+  } catch (error) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "模型目录读取失败";
+    select.append(option);
+    setStatus(error.message, "", 0);
+  }
+}
+
+function updateProcessingMode() {
+  const aiEnabled = byId("processingMode").value === "ai_enhanced";
+  byId("aiControls").classList.toggle("hidden", !aiEnabled);
 }
 
 byId("imageFiles").addEventListener("change", (event) => updateFiles(event.target.files));
@@ -380,6 +587,24 @@ byId("applyCurve").addEventListener("click", generateCurvedMesh);
 byId("meshRows").addEventListener("change", resetMesh);
 byId("meshColumns").addEventListener("change", resetMesh);
 byId("resetGeometry").addEventListener("click", () => state.mode === "mesh" ? resetMesh() : resetCorners());
+byId("processingMode").addEventListener("change", updateProcessingMode);
+[["aiStrength", "aiStrengthValue"], ["aiDenoise", "aiDenoiseValue"]].forEach(([inputId, outputId]) => {
+  byId(inputId).addEventListener("input", () => { byId(outputId).value = byId(inputId).value; });
+});
+document.querySelectorAll("[data-result]").forEach((button) => {
+  button.addEventListener("click", () => selectResult(button.dataset.result));
+});
+byId("comparisonMode").addEventListener("change", () => {
+  byId("splitControl").classList.toggle("hidden", byId("comparisonMode").value !== "split");
+  drawCanvas();
+});
+byId("splitPosition").addEventListener("input", drawCanvas);
+byId("actualPixels").addEventListener("click", () => {
+  state.actualPixels = !state.actualPixels;
+  byId("actualPixels").classList.toggle("active", state.actualPixels);
+  byId("actualPixels").textContent = state.actualPixels ? "适应" : "100%";
+  drawCanvas();
+});
 
 canvas.addEventListener("pointerdown", (event) => {
   state.dragging = nearestHandle(pointerLocation(event));
@@ -396,3 +621,5 @@ canvas.addEventListener("pointermove", (event) => {
 });
 ["pointerup", "pointercancel"].forEach((name) => canvas.addEventListener(name, () => { state.dragging = null; }));
 window.addEventListener("resize", drawCanvas);
+updateProcessingMode();
+loadModels();

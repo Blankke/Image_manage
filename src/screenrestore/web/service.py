@@ -4,13 +4,29 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
 from screenrestore.core.operator import ProcessingContext
-from screenrestore.core.presets import PresetId, apply_preset, build_default_pipeline
+from screenrestore.core.pipeline import ImagePipeline
+from screenrestore.core.presets import (
+    PresetId,
+    ProcessingMode,
+    apply_preset,
+    apply_processing_mode,
+    build_default_pipeline,
+)
+from screenrestore.inference.backend import InferenceError
+from screenrestore.inference.factory import create_inference_backend
+from screenrestore.inference.model_manifest import (
+    ModelManifest,
+    ModelRole,
+    discover_manifests,
+)
 from screenrestore.io.image_exporter import ExportFormat, encode_image_bytes
 from screenrestore.io.image_loader import decode_image_bytes
 from screenrestore.operators.geometry import detect_quadrilaterals
@@ -43,13 +59,95 @@ class RestoreResult:
     diagnostics: dict[str, object]
 
 
+class OutputVariant(StrEnum):
+    """Web 比较视图可请求的执行终点。"""
+
+    GEOMETRY = "geometry"
+    FIDELITY = "fidelity"
+    AI_ENHANCED = "ai_enhanced"
+
+
+class WebModelCatalog:
+    """只暴露服务器允许目录中发现的清单 ID，浏览器不能提交路径或命令。"""
+
+    def __init__(self, directories: list[str | Path] | None = None) -> None:
+        default_directory = Path(__file__).resolve().parents[3] / "models" / "examples"
+        configured = directories if directories is not None else [default_directory]
+        self.directories = tuple(Path(item).expanduser().resolve() for item in configured)
+        self._manifests: dict[str, ModelManifest] = {}
+        self.errors: list[str] = []
+        self.refresh()
+
+    def refresh(self) -> None:
+        """重新扫描受信目录并拒绝重复 ID。"""
+
+        discovered: dict[str, ModelManifest] = {}
+        duplicate_ids: set[str] = set()
+        errors: list[str] = []
+        for directory in self.directories:
+            manifests, directory_errors = discover_manifests(directory)
+            errors.extend(directory_errors)
+            for manifest in manifests:
+                if manifest.id in discovered or manifest.id in duplicate_ids:
+                    errors.append(f"重复模型 ID：{manifest.id}")
+                    discovered.pop(manifest.id, None)
+                    duplicate_ids.add(manifest.id)
+                    continue
+                discovered[manifest.id] = manifest
+        self._manifests = discovered
+        self.errors = errors
+
+    def get(self, manifest_id: str) -> ModelManifest:
+        """仅按已发现 ID 返回清单。"""
+
+        try:
+            return self._manifests[manifest_id]
+        except KeyError as exc:
+            raise ValueError(f"模型未获服务器允许或不存在：{manifest_id}") from exc
+
+    def response(self) -> dict[str, object]:
+        """返回有限模型元数据和本机可用状态。"""
+
+        items: list[dict[str, object]] = []
+        for manifest in self._manifests.values():
+            available, _reason = create_inference_backend(manifest).is_available()
+            items.append(
+                {
+                    "id": manifest.id,
+                    "name": manifest.name,
+                    "role": manifest.role.value,
+                    "task": manifest.task,
+                    "available": available,
+                    # 不把本机解释器、权重或插件绝对路径暴露给浏览器。
+                    "status": "可用" if available else "本地运行时或模型文件不完整",
+                    "license": manifest.license,
+                    "homepage": manifest.homepage,
+                }
+            )
+        return {
+            "status": "ok",
+            "models": items,
+            "errors": self.errors,
+        }
+
+
 class WebRestoreService:
     """组合多帧预处理与共享 ``ImagePipeline``，不持有用户图片。"""
 
-    def __init__(self, max_pixels_per_image: int = 80_000_000) -> None:
+    def __init__(
+        self,
+        max_pixels_per_image: int = 80_000_000,
+        model_directories: list[str | Path] | None = None,
+    ) -> None:
         if max_pixels_per_image <= 0:
             raise ValueError("Web 单图像素上限必须大于 0")
         self.max_pixels_per_image = max_pixels_per_image
+        self.model_catalog = WebModelCatalog(model_directories)
+
+    def models(self) -> dict[str, object]:
+        """列出浏览器可安全选择的本地模型。"""
+
+        return self.model_catalog.response()
 
     def decode_uploads(self, uploads: list[UploadedImage]) -> list[np.ndarray]:
         """解码 1～20 张上传图，响应结束后即可释放原始字节。"""
@@ -117,19 +215,44 @@ class WebRestoreService:
         images_rgb: list[np.ndarray],
         settings: dict[str, Any] | None = None,
     ) -> RestoreResult:
-        """运行多帧融合、镜头、透视、网格和经典恢复流水线。"""
+        """运行几何、Fidelity 或明确标注的 AI Enhanced 路径。"""
 
         if not images_rgb:
             raise ValueError("至少需要一张图片")
         values = settings or {}
         _reject_unknown(
             values,
-            {"preset", "corners", "ratio_mode", "custom_ratio", "lens", "mesh", "fusion"},
+            {
+                "preset",
+                "processing_mode",
+                "output_variant",
+                "corners",
+                "ratio_mode",
+                "custom_ratio",
+                "lens",
+                "mesh",
+                "fusion",
+                "operator_overrides",
+                "ai",
+            },
             "恢复设置",
         )
         preset = PresetId(str(values.get("preset", PresetId.DISPLAY.value)))
         if preset == PresetId.CUSTOM:
             raise ValueError("Web 恢复不能直接选择 custom 预设")
+        processing_mode = ProcessingMode(
+            str(values.get("processing_mode", ProcessingMode.FIDELITY.value))
+        )
+        output_variant = OutputVariant(
+            str(
+                values.get(
+                    "output_variant",
+                    OutputVariant.AI_ENHANCED.value
+                    if processing_mode == ProcessingMode.AI_ENHANCED
+                    else OutputVariant.FIDELITY.value,
+                )
+            )
+        )
 
         fusion_diagnostics: dict[str, object]
         if len(images_rgb) > 1:
@@ -154,6 +277,7 @@ class WebRestoreService:
 
         pipeline = build_default_pipeline()
         apply_preset(pipeline, preset)
+        _apply_operator_overrides(pipeline, values.get("operator_overrides", {}))
         lens_settings = values.get("lens", {})
         if not isinstance(lens_settings, dict):
             raise ValueError("lens 必须是 JSON 对象")
@@ -203,11 +327,39 @@ class WebRestoreService:
         else:
             pipeline.state("mesh_warp").enabled = False
 
+        ai_diagnostics = _configure_ai(
+            pipeline,
+            self.model_catalog,
+            values.get("ai", {}),
+            processing_mode,
+            output_variant,
+        )
+        apply_processing_mode(pipeline, processing_mode)
+        if output_variant == OutputVariant.GEOMETRY:
+            keep = {"orientation", "lens_distortion", "geometry", "mesh_warp"}
+            for state in pipeline.states:
+                if state.operator.id not in keep:
+                    state.enabled = False
+        elif output_variant == OutputVariant.FIDELITY:
+            pipeline.state("enhancement_model").enabled = False
+
         context = ProcessingContext(preview=False)
-        output = pipeline.process(source, context)
+        fallback_reason: str | None = None
+        try:
+            output = pipeline.process(source, context)
+        except InferenceError as exc:
+            # 可选模型不可用时退回相同经典路径；单次模型失败不能破坏本地恢复。
+            fallback_reason = str(exc)
+            pipeline.state("restoration_model").enabled = False
+            pipeline.state("enhancement_model").enabled = False
+            context = ProcessingContext(preview=False)
+            output = pipeline.process(source, context, source_id="web-model-fallback")
         diagnostics: dict[str, object] = {
             "status": "ok",
             "preset": preset.value,
+            "processing_mode": processing_mode.value,
+            "output_variant": output_variant.value,
+            "working_precision": "RGB float32 [0,1]",
             "input_frames": len(images_rgb),
             "input_size": [source.shape[1], source.shape[0]],
             "output_size": [output.shape[1], output.shape[0]],
@@ -218,6 +370,28 @@ class WebRestoreService:
             },
             "lens": _json_metadata(context.metadata.get("lens_distortion")),
             "mesh": _json_metadata(context.metadata.get("mesh_warp")),
+            "artifacts": {
+                "banding": _json_metadata(context.metadata.get("banding")),
+                "demoire": _json_metadata(context.metadata.get("demoire")),
+                "dehalo": _json_metadata(context.metadata.get("dehalo")),
+                "auto_black_level": _json_metadata(
+                    context.metadata.get("auto_black_level")
+                ),
+                "auto_white_background": _json_metadata(
+                    context.metadata.get("auto_white_background")
+                ),
+            },
+            "ai": {
+                **ai_diagnostics,
+                "fallback_reason": fallback_reason,
+                "restoration": _json_metadata(context.metadata.get("restoration_model")),
+                "enhancement": _json_metadata(context.metadata.get("enhancement_model")),
+            },
+            "fidelity_claim": (
+                "perceptual-generated-detail"
+                if output_variant == OutputVariant.AI_ENHANCED and fallback_reason is None
+                else "observation-preserving-classic-restoration"
+            ),
             "physical_limits": (
                 "多帧结果仅融合实际观测；所有输入中均被遮挡、饱和或模糊的信息仍标记为未解决。"
                 if len(images_rgb) > 1
@@ -255,6 +429,114 @@ def _mesh_parameters(raw: dict[str, Any]) -> MeshWarpParameters:
     params = MeshWarpParameters.from_dict(values)
     params.validate()
     return params
+
+
+_WEB_OVERRIDE_OPERATORS = {
+    "banding",
+    "demoire",
+    "denoise",
+    "white_balance",
+    "exposure",
+    "clahe",
+    "illumination",
+    "reflection",
+    "dehalo",
+    "deblur",
+    "sharpen",
+}
+
+
+def _apply_operator_overrides(pipeline: ImagePipeline, raw: object) -> None:
+    """严格应用经典算子覆盖；模型和固定几何节点不能借此注入路径。"""
+
+    if not isinstance(raw, dict):
+        raise ValueError("operator_overrides 必须是 JSON 对象")
+    for operator_id, configuration in raw.items():
+        if operator_id not in _WEB_OVERRIDE_OPERATORS:
+            raise ValueError(f"Web 不允许覆盖算子：{operator_id}")
+        if not isinstance(configuration, dict):
+            raise ValueError(f"算子 {operator_id} 覆盖必须是 JSON 对象")
+        _reject_unknown(configuration, {"enabled", "params"}, f"算子 {operator_id} 覆盖")
+        state = pipeline.state(operator_id)
+        if "enabled" in configuration:
+            state.enabled = bool(configuration["enabled"])
+        if "params" in configuration:
+            raw_params = configuration["params"]
+            if not isinstance(raw_params, dict):
+                raise ValueError(f"算子 {operator_id} params 必须是 JSON 对象")
+            merged = {**state.params.to_dict(), **raw_params}
+            params = state.operator.parameter_type.from_dict(merged)
+            state.operator.validate(params)
+            state.params = params
+    pipeline.cache.clear()
+
+
+def _configure_ai(
+    pipeline: ImagePipeline,
+    catalog: WebModelCatalog,
+    raw: object,
+    processing_mode: ProcessingMode,
+    output_variant: OutputVariant,
+) -> dict[str, object]:
+    """按白名单 ID 配置一个角色明确的本地模型。"""
+
+    if not isinstance(raw, dict):
+        raise ValueError("ai 必须是 JSON 对象")
+    _reject_unknown(
+        raw,
+        {
+            "enabled",
+            "manifest_id",
+            "strength",
+            "denoise_strength",
+            "output_scale",
+            "blend_strength",
+        },
+        "AI 设置",
+    )
+    enabled = bool(raw.get("enabled", False)) and output_variant != OutputVariant.GEOMETRY
+    if not enabled:
+        if processing_mode == ProcessingMode.AI_ENHANCED and output_variant == OutputVariant.AI_ENHANCED:
+            raise ValueError("AI Enhanced 模式必须选择一个服务器允许的增强模型")
+        return {"enabled": False, "generated_detail_warning": None}
+    manifest_id = raw.get("manifest_id")
+    if not isinstance(manifest_id, str) or not manifest_id:
+        raise ValueError("启用 AI 时必须提供 manifest_id")
+    manifest = catalog.get(manifest_id)
+    if manifest.role == ModelRole.ENHANCEMENT and processing_mode != ProcessingMode.AI_ENHANCED:
+        raise ValueError("感知增强模型只能在 AI Enhanced 模式使用")
+    if output_variant == OutputVariant.AI_ENHANCED and manifest.role != ModelRole.ENHANCEMENT:
+        raise ValueError("AI Enhanced 输出必须选择 enhancement 角色模型")
+    operator_id = (
+        "restoration_model"
+        if manifest.role == ModelRole.RESTORATION
+        else "enhancement_model"
+    )
+    state = pipeline.state(operator_id)
+    params = state.params.to_dict()
+    params.update(
+        {
+            "manifest_path": str(manifest.manifest_path),
+            "model_strength": float(raw.get("strength", 0.25)),
+            "denoise_strength": float(raw.get("denoise_strength", 0.25)),
+            "output_scale": float(raw.get("output_scale", 1.0)),
+            "blend_strength": float(raw.get("blend_strength", 1.0)),
+        }
+    )
+    state.params = state.operator.parameter_type.from_dict(params)
+    state.operator.validate(state.params)
+    state.enabled = True
+    return {
+        "enabled": True,
+        "manifest_id": manifest.id,
+        "role": manifest.role.value,
+        "task": manifest.task,
+        "generated_detail_warning": (
+            "AI 增强会依据模型先验生成高频纹理，结果不保证等于原始数字帧。"
+            if manifest.role == ModelRole.ENHANCEMENT
+            else None
+        ),
+    }
 
 
 def _proxy(image: np.ndarray, max_edge: int) -> tuple[np.ndarray, float]:

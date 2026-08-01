@@ -10,7 +10,7 @@ import numpy as np
 
 from screenrestore.core.operator import ProcessingContext
 from screenrestore.operators.model_plugin import (
-    ModelPluginOperator,
+    EnhancementModelOperator,
     ModelPluginParameters,
 )
 
@@ -23,6 +23,8 @@ def test_model_operator_runs_external_manifest_and_blends(tmp_path: Path) -> Non
                 "id": "copy",
                 "name": "Copy",
                 "type": "external_process",
+                "role": "enhancement",
+                "task": "perceptual_restoration",
                 "executable": sys.executable,
                 "arguments": [
                     "-c",
@@ -34,10 +36,10 @@ def test_model_operator_runs_external_manifest_and_blends(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
-    source = np.full((19, 27, 3), (15, 90, 170), np.uint8)
-    output = ModelPluginOperator().apply(
+    source = np.full((19, 27, 3), (15, 90, 170), np.uint8).astype(np.float32) / 255.0
+    output = EnhancementModelOperator().apply(
         source,
-        ModelPluginParameters(manifest_path=str(manifest_path), strength=0.6),
+        ModelPluginParameters(manifest_path=str(manifest_path), blend_strength=0.6),
         ProcessingContext(),
     )
-    assert np.array_equal(output, source)
+    assert np.allclose(output, source, atol=0.5 / 255.0)

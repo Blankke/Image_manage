@@ -11,7 +11,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float, to_float, to_uint8
 from .reflection_dct import suppress_reflection_dct
 
 
@@ -75,12 +75,12 @@ class ReflectionOperator(ImageOperator[ReflectionParameters]):
         params: ReflectionParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.mode == ReflectionMode.GRADIENT_DCT:
             context.report(0.08, "执行梯度 DCT 反光抑制")
             restored = suppress_reflection_dct(
-                image.astype(np.float32) / 255.0,
+                image,
                 gradient_threshold=params.gradient_threshold,
                 smoothness_lambda=params.smoothness_lambda,
                 curvature_weight=params.curvature_weight,
@@ -90,10 +90,10 @@ class ReflectionOperator(ImageOperator[ReflectionParameters]):
             context.metadata["reflection_mode"] = params.mode.value
             context.metadata["reflection_mask"] = None
             context.report(1.0, "梯度 DCT 反光抑制完成")
-            return np.clip(np.rint(restored * 255.0), 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
-        saturation = hsv[..., 1] / 255.0
-        value = hsv[..., 2] / 255.0
+            return clip_float(restored)
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        saturation = hsv[..., 1]
+        value = hsv[..., 2]
         auto = ((value >= params.bright_threshold) & (saturation <= params.low_saturation_threshold)) | (
             value >= 0.985
         )
@@ -109,14 +109,14 @@ class ReflectionOperator(ImageOperator[ReflectionParameters]):
             np.maximum(value - params.bright_threshold, 0.0) * 0.25
         )
         blend = (params.strength * soft_mask).astype(np.float32)
-        hsv[..., 2] = np.clip((value * (1 - blend) + compressed_value * blend) * 255, 0, 255)
-        suppressed = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+        hsv[..., 2] = np.clip(value * (1 - blend) + compressed_value * blend, 0.0, 1.0)
+        suppressed = clip_float(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB))
         area_ratio = float(np.mean(mask > 0))
         if params.inpaint_method != InpaintMethod.NONE and 0 < area_ratio <= 0.08:
             method = cv2.INPAINT_TELEA if params.inpaint_method == InpaintMethod.TELEA else cv2.INPAINT_NS
-            suppressed_bgr = cv2.cvtColor(suppressed, cv2.COLOR_RGB2BGR)
+            suppressed_bgr = cv2.cvtColor(to_uint8(suppressed), cv2.COLOR_RGB2BGR)
             restored_bgr = cv2.inpaint(suppressed_bgr, mask, params.inpaint_radius, method)
-            suppressed = cv2.cvtColor(restored_bgr, cv2.COLOR_BGR2RGB)
+            suppressed = to_float(cv2.cvtColor(restored_bgr, cv2.COLOR_BGR2RGB))
         context.metadata["reflection_mask"] = soft_mask if params.show_mask else None
         context.metadata["reflection_mask_area"] = area_ratio
         return suppressed

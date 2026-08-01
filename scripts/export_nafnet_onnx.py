@@ -143,6 +143,8 @@ def build_manifest_payload(
         "id": f"nafnet-gopro-width{width}-onnx-cpu",
         "name": f"NAFNet GoPro width{width} ONNX CPU（本地转换）",
         "type": "onnx",
+        "role": "restoration",
+        "task": "deblur",
         "model_path": Path(relative_model).as_posix(),
         "required_files": [Path(relative_model).as_posix()],
         "supports_tiling": True,

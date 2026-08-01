@@ -10,7 +10,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 @dataclass
@@ -44,17 +44,21 @@ class ClaheOperator(ImageOperator[ClaheParameters]):
         params: ClaheParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         context.cancellation.check()
         if params.strength == 0:
             return image.copy()
+        # OpenCV CLAHE 仅支持整数亮度；量化被限制在本算子内部，不传播给下游。
         lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        lightness, channel_a, channel_b = cv2.split(lab)
+        lightness = np.clip(np.rint(lab[..., 0] / 100.0 * 255.0), 0, 255).astype(np.uint8)
         enhanced = cv2.createCLAHE(
             clipLimit=params.clip_limit,
             tileGridSize=(params.tile_grid_size, params.tile_grid_size),
         ).apply(lightness)
-        mixed = cv2.addWeighted(lightness, 1.0 - params.strength, enhanced, params.strength, 0)
-        return cv2.cvtColor(cv2.merge((mixed, channel_a, channel_b)), cv2.COLOR_LAB2RGB)
-
+        mixed = lightness.astype(np.float32) * (1.0 - params.strength) + enhanced.astype(
+            np.float32
+        ) * params.strength
+        output_lab = lab.copy()
+        output_lab[..., 0] = mixed / 255.0 * 100.0
+        return clip_float(cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB))

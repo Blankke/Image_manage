@@ -15,9 +15,13 @@ MCNN `468b2677`、UnDeM `73cb9406`、NAFNet `2b4af71e`、Real-ESRGAN
 | [makeacopy](https://github.com/egdels/makeacopy) | 离线扫描产品结构 | 顶层 LICENSE 仅声明所含 OpenCV 文件为 Apache-2.0，项目整体授权不清晰 | 仅理解思路，禁止复制代码 |
 | [OpenCV](https://github.com/opencv/opencv) | 轮廓、透视、滤波、色彩转换 | Apache-2.0 | 通过 PyPI 二进制依赖调用公开 API，不复制源码 |
 | [HandyView](https://github.com/xinntao/HandyView) | 图片查看、缩放与比较交互 | MIT | 仅研究交互，不复制代码 |
-| [fast-reflection-removal](https://github.com/JanPalasek/fast-reflection-removal) | 去反光插件方向 | MIT | 已移植梯度/DCT Poisson 核心并做数值、取消和依赖改造；影院预设中等强度启用，其他预设关闭，始终标为实验性 |
+| [fast-reflection-removal](https://github.com/JanPalasek/fast-reflection-removal) | 去反光插件方向 | MIT | 已移植梯度/DCT Poisson 核心并做数值、取消和依赖改造；所有 Fidelity 预设默认关闭，始终标为实验性 |
 | [Awesome-Demoireing](https://github.com/rebeccaeexu/Awesome-Demoireing) | 去摩尔纹论文索引 | MIT | 仅作研究索引，不复制实现 |
-| [ESDNet / UHDM](https://xinyu-andy.github.io/uhdm-page/) | 4K 屏幕照片去摩尔纹候选 | 官方论文/项目页可访问，当前未核实到可随本项目分发权重的明确许可 | 仅列入候选筛选，不复制结构、不下载或分发权重 |
+| [ESDNet / UHDM](https://github.com/CVMI-Lab/UHDM) | 4K 屏幕照片去摩尔纹候选 | 代码仓库 Apache-2.0；权重分发条款仍需独立核查 | 代码许可明确，但尚未通过 CPU/ONNX 和 8 组配对筛选；暂不复制结构或分发权重 |
+| [CLEAR](https://github.com/libozhu03/CLEAR) | 联合去闪烁条带与摩尔纹 | 当前仓库仅项目页，未发现代码/权重许可证 | 仅研究论文和数据设计，禁止复制或宣称已接入 |
+| [RIFLE](https://github.com/libozhu03/RIFLE) | 扩散式闪烁条带去除 | 安装、权重与推理仍为 TBD，未发现仓库许可证 | 仅研究退化模拟与掩膜评估，不进入 CPU 默认路径 |
+| [BRACE](https://github.com/ZZH-qwq/BRACE) | 多曝光 RAW 条带恢复 | 安装、数据、权重与推理仍为 TODO，未发现仓库许可证 | 仅作为未来多曝光 RAW 协议参考 |
+| [BinaryDemoire](https://github.com/zhengchen1999/BinaryDemoire) | 1-bit 轻量去摩尔纹 | 当前尚未发布代码/权重且无许可证 | 继续监测，不能接入或分发 |
 | [DDA](https://github.com/zyxxmu/DDA) | 动态计算量分配思想 | 未发现明确许可证 | 采用“热度决定局部处理强度”思想；原测试硬编码 CUDA，未复制到核心 |
 | [MoirePhotoRestoration-MCNN](https://github.com/ZhengJun-AI/MoirePhotoRestoration-MCNN) | 多尺度去摩尔纹 | MIT | 已核对网络/测试代码；缺少适合当前实拍场景的即用权重，暂不迁入 |
 | [UnDeM](https://github.com/zysxmu/UnDeM) | 摩尔纹合成与恢复 | 未发现明确许可证 | 已核对结构；本轮不引入训练依赖和数据集 |

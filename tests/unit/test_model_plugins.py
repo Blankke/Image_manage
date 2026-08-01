@@ -22,6 +22,7 @@ def test_manifest_roundtrip_and_discovery(tmp_path: Path) -> None:
     manifest_path.write_text(
         """{
           "id": "copy", "name": "Copy", "type": "external_process",
+          "role": "restoration", "task": "screen_restoration",
           "executable": "/bin/true", "arguments": [], "license": "MIT"
         }""",
         encoding="utf-8",
@@ -39,6 +40,8 @@ def test_external_process_handles_image_io_without_shell() -> None:
             "id": "python-copy",
             "name": "Python copy",
             "type": "external_process",
+            "role": "restoration",
+            "task": "screen_restoration",
             "executable": sys.executable,
             "arguments": [
                 "-c",
@@ -49,9 +52,9 @@ def test_external_process_handles_image_io_without_shell() -> None:
             "license": "test-only",
         }
     )
-    image = np.full((24, 31, 3), (25, 80, 190), np.uint8)
+    image = np.full((24, 31, 3), (25, 80, 190), np.uint8).astype(np.float32) / 255.0
     output = ExternalProcessBackend(manifest).run(image, ProcessingContext())
-    assert np.array_equal(output, image)
+    assert np.allclose(output, image, atol=0.5 / 255.0)
 
 
 def test_external_process_exposes_manifest_directory_placeholder(tmp_path: Path) -> None:
@@ -62,6 +65,8 @@ def test_external_process_exposes_manifest_directory_placeholder(tmp_path: Path)
             "id": "manifest-dir",
             "name": "Manifest dir",
             "type": "external_process",
+            "role": "restoration",
+            "task": "screen_restoration",
             "executable": sys.executable,
             "arguments": [
                 "-c",
@@ -77,9 +82,9 @@ def test_external_process_exposes_manifest_directory_placeholder(tmp_path: Path)
         },
         manifest_path,
     )
-    image = np.full((7, 9, 3), 91, np.uint8)
+    image = np.full((7, 9, 3), 91 / 255.0, np.float32)
     output = ExternalProcessBackend(manifest).run(image, ProcessingContext())
-    assert np.array_equal(output, image)
+    assert np.allclose(output, image, atol=0.5 / 255.0)
 
 
 def test_external_process_reports_missing_required_weight(tmp_path: Path) -> None:
@@ -89,6 +94,8 @@ def test_external_process_reports_missing_required_weight(tmp_path: Path) -> Non
             "id": "missing-weight",
             "name": "Missing weight",
             "type": "external_process",
+            "role": "restoration",
+            "task": "screen_restoration",
             "executable": sys.executable,
             "required_files": ["weights/not-installed.pth"],
         },
@@ -105,6 +112,8 @@ def test_external_process_python_placeholder_uses_active_venv() -> None:
             "id": "active-python",
             "name": "Active Python",
             "type": "external_process",
+            "role": "restoration",
+            "task": "screen_restoration",
             "executable": "{python}",
         }
     )
@@ -119,6 +128,8 @@ def test_external_process_can_be_cancelled() -> None:
             "id": "sleep",
             "name": "Sleep",
             "type": "external_process",
+            "role": "restoration",
+            "task": "screen_restoration",
             "executable": sys.executable,
             "arguments": ["-c", "import time; time.sleep(3)", "{input}", "{output}"],
             "timeout_seconds": 5,
@@ -130,7 +141,7 @@ def test_external_process_can_be_cancelled() -> None:
     try:
         with pytest.raises(ProcessingCancelled):
             ExternalProcessBackend(manifest).run(
-                np.zeros((8, 8, 3), np.uint8),
+                np.zeros((8, 8, 3), np.float32),
                 ProcessingContext(cancellation=token),
             )
     finally:
@@ -166,6 +177,8 @@ def test_onnx_manifest_tiling_runs_identity_session(
             "id": "identity-onnx",
             "name": "Identity ONNX",
             "type": "onnx",
+            "role": "restoration",
+            "task": "screen_restoration",
             "model_path": str(model_path),
             "supports_tiling": True,
             "tile_size": 32,
@@ -174,8 +187,11 @@ def test_onnx_manifest_tiling_runs_identity_session(
         }
     )
     yy, xx = np.indices((43, 61))
-    image = np.stack(((xx * 3) % 256, (yy * 5) % 256, (xx + yy) % 256), axis=2).astype(
-        np.uint8
+    image = (
+        np.stack(((xx * 3) % 256, (yy * 5) % 256, (xx + yy) % 256), axis=2).astype(
+            np.float32
+        )
+        / 255.0
     )
     restored = OnnxBackend(manifest).run(image, ProcessingContext())
-    assert np.array_equal(restored, image)
+    assert np.allclose(restored, image, atol=1e-6)

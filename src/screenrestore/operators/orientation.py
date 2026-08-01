@@ -10,7 +10,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_rgb_u8
+from ._utils import require_rgb_float
 
 
 @dataclass
@@ -41,7 +41,7 @@ class OrientationOperator(ImageOperator[OrientationParameters]):
         params: OrientationParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         context.cancellation.check()
         if params.rotation == 0:
@@ -52,4 +52,3 @@ class OrientationOperator(ImageOperator[OrientationParameters]):
             270: cv2.ROTATE_90_COUNTERCLOCKWISE,
         }[params.rotation]
         return cv2.rotate(image, code)
-

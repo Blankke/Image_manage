@@ -81,7 +81,8 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 ## 研究参考
 
 用户指定的完整参考项目、许可证核查、实际移植范围和未采用原因见
-`docs/REFERENCE_PROJECTS.md`。除上面逐文件列出的三项移植外，其余参考仓库未复制
-源码、权重、素材或二进制。
+`docs/REFERENCE_PROJECTS.md`；针对 CLEAR、RIFLE、BRACE、BinaryDemoire、ESDNet
+等屏摄候选的代码/权重状态见 `docs/SCREEN_AI_RESEARCH.md`。除上面逐文件列出的三项
+移植外，其余参考仓库未复制源码、权重、素材或二进制。
 
 若未来引入第三方代码或分发外部组件，必须在本文件补充：来源仓库与版本、原始文件、版权声明、许可证、修改说明和分发方式。

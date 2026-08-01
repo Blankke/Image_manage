@@ -22,5 +22,4 @@ class InferenceBackend(ABC):
 
     @abstractmethod
     def run(self, image_rgb: np.ndarray, context: ProcessingContext) -> np.ndarray:
-        """在本地运行模型并返回 RGB uint8 图像。"""
-
+        """在本地运行模型并返回 RGB float32 [0,1] 图像。"""

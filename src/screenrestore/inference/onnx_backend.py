@@ -62,7 +62,7 @@ class OnnxBackend(InferenceBackend):
                     providers=["CPUExecutionProvider"],
                 )
             input_name = self._session.get_inputs()[0].name
-            tensor = image_rgb.astype(np.float32).transpose(2, 0, 1)[None] / 255.0
+            tensor = image_rgb.transpose(2, 0, 1)[None]
             output = self._session.run(None, {input_name: tensor})[0]
         except Exception as exc:  # noqa: BLE001 - 可选运行时错误统一转换
             raise InferenceError(f"ONNX 推理失败：{exc}") from exc
@@ -80,6 +80,6 @@ def _tensor_to_rgb(output: np.ndarray) -> np.ndarray:
         output = np.repeat(output, 3, axis=2)
     if output.shape[2] != 3:
         raise InferenceError("ONNX 输出必须包含三个 RGB 通道")
-    if np.issubdtype(output.dtype, np.floating):
-        output = output * 255.0
-    return np.clip(np.rint(output), 0, 255).astype(np.uint8)
+    if np.issubdtype(output.dtype, np.integer):
+        output = output.astype(np.float32) / 255.0
+    return np.ascontiguousarray(np.clip(output, 0.0, 1.0).astype(np.float32))

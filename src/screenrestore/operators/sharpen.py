@@ -10,7 +10,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, to_float, to_uint8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 @dataclass
@@ -48,7 +48,8 @@ class SharpenOperator(ImageOperator[SharpenParameters]):
         context: ProcessingContext,
     ) -> np.ndarray:
         self.validate(params)
-        source = to_float(image)
+        require_rgb_float(image)
+        source = image
         context.cancellation.check()
         if params.amount == 0:
             return image.copy()
@@ -60,5 +61,4 @@ class SharpenOperator(ImageOperator[SharpenParameters]):
         highlight_mask = 1.0 - params.highlight_protection * np.square(luminance)
         shadow_mask = 1.0 - params.shadow_protection * np.square(1.0 - luminance)
         result = source + detail * params.amount * threshold_mask * highlight_mask * shadow_mask
-        return to_uint8(result)
-
+        return clip_float(result)

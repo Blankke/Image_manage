@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from .backend import InferenceError
+
+
+class ModelRole(StrEnum):
+    """模型在流水线中的语义位置。"""
+
+    RESTORATION = "restoration"
+    ENHANCEMENT = "enhancement"
+
+
+ALLOWED_MODEL_TASKS = {
+    "deblur",
+    "demoire",
+    "deband",
+    "denoise",
+    "screen_restoration",
+    "perceptual_restoration",
+    "super_resolution",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +36,8 @@ class ModelManifest:
     id: str
     name: str
     type: str
+    role: ModelRole
+    task: str
     executable: str | None = None
     arguments: list[str] = field(default_factory=list)
     required_files: list[str] = field(default_factory=list)
@@ -34,12 +55,19 @@ class ModelManifest:
     def from_dict(cls, data: dict[str, Any], manifest_path: Path | None = None) -> ModelManifest:
         """严格解析模型清单。"""
 
-        required = ("id", "name", "type")
+        required = ("id", "name", "type", "role", "task")
         if any(not isinstance(data.get(key), str) or not data[key] for key in required):
-            raise InferenceError("模型清单必须包含非空 id、name 和 type")
+            raise InferenceError("模型清单必须包含非空 id、name、type、role 和 task")
         backend_type = str(data["type"])
         if backend_type not in {"external_process", "onnx", "openvino"}:
             raise InferenceError(f"不支持的模型类型：{backend_type}")
+        try:
+            role = ModelRole(str(data["role"]))
+        except ValueError as exc:
+            raise InferenceError("模型 role 必须是 restoration 或 enhancement") from exc
+        task = str(data["task"])
+        if task not in ALLOWED_MODEL_TASKS:
+            raise InferenceError(f"不支持的模型任务：{task}")
         executable = data.get("executable")
         model_path = data.get("model_path")
         if backend_type == "external_process" and not isinstance(executable, str):
@@ -68,6 +96,8 @@ class ModelManifest:
             id=str(data["id"]),
             name=str(data["name"]),
             type=backend_type,
+            role=role,
+            task=task,
             executable=executable,
             arguments=list(arguments),
             required_files=list(required_files),

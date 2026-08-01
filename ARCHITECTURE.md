@@ -11,7 +11,8 @@ PySide6 UI / CLI / 本地 Web UI + HTTP API
         ↓
 OpenCV / NumPy / SciPy / Pillow
 
-可选：ModelPluginOperator → ModelManifest → External / ONNX / OpenVINO → tiled_inference
+可选：RestorationModelOperator / EnhancementModelOperator
+      → ModelManifest(role + task) → External / ONNX / OpenVINO → tiled_inference
 ```
 
 - `core/` 不依赖 Qt，定义只读图像文档、参数协议、算子接口、流水线、LRU 缓存、历史和取消令牌。
@@ -19,13 +20,16 @@ OpenCV / NumPy / SciPy / Pillow
 - `ui/` 只协调状态、显示和线程；算法运行在 `QThreadPool` worker，worker 只通过信号返回结果。
 - `web/` 提供无框架、同源的静态前端和版本化本地 HTTP API；服务层只组合核心流水线，HTTP 层负责上传上限、并发上限、安全响应头和二进制编码，不在磁盘缓存用户图片。
 - `io/` 负责加载、项目和原子导出；GUI 与 CLI 不复制算法。
-- `inference/` 只在实际选择后惰性导入可选运行时，核心安装不包含它们；默认禁用的
-  `ModelPluginOperator` 让 GUI、项目和 CLI 真正调用同一模型后端。
+- `inference/` 只在实际选择后惰性导入可选运行时，核心安装不包含它们；恢复模型与
+  感知增强模型是两个固定语义节点，清单必须声明 `role` 和 `task`。
 - `diagnostics/` 提供直方图、频谱和日志配置。
 
 ## 图像契约
 
-模块间统一传递 `H×W×3` 的 RGB `uint8`。需要色调数学时，算子显式转为 `[0,1] float32`，处理后裁剪、去除 NaN/Inf 并转回 `uint8`。OpenCV BGR、LAB、YCrCb 和 HSV 只在调用边界显式转换。
+加载器保留只读 RGB `uint8` 原图；进入 `ImagePipeline` 时只转换一次，此后节点、缓存和
+模型后端统一传递 `H×W×3`、`[0,1]` 的 RGB `float32`。只有 OpenCV 明确要求 8 位的
+NLM、CLAHE、inpaint 边界，以及外部进程 PNG 桥和最终编码器才量化为 `uint8`。摄影
+曝光与自动白平衡增益在线性光中计算，其他面向 UI 的感知色调在 sRGB 中计算。
 
 `ImageDocument.original_rgb` 被标记为只读。代理图按最长边缓存，默认 1600 像素；导出始终从原图重新计算。
 
@@ -51,7 +55,7 @@ OpenCV / NumPy / SciPy / Pillow
 
 ## 项目格式
 
-`.screenrestore.json` 当前 `format_version` 为 2，保存应用版本、相对源图路径、SHA-256、源图尺寸、镜头、四角、Mesh、比例、完整算子顺序/开关/参数、预设和模型配置。版本 2 要求算子集合完整，不保留版本 1 的双解析分支。源图缺失或哈希变化会警告，但允许重新定位或继续。
+`.screenrestore.json` 当前 `format_version` 为 4，保存应用版本、相对源图路径、SHA-256、源图尺寸、镜头、四角、Mesh、比例、完整算子顺序/开关/参数、预设和模型配置。版本 4 增加方向相干的亮度/色度联合去摩尔纹参数和独立 `dehalo` 节点；模型仍由 `restoration_model` / `enhancement_model` 两个固定语义节点承载。项目不保留旧格式双解析分支。源图缺失或哈希变化会警告，但允许重新定位或继续。
 
 ## Web 安全与隐私
 
@@ -59,6 +63,8 @@ OpenCV / NumPy / SciPy / Pillow
 - 上传要求 `Content-Length` 和 `multipart/form-data`，限制总字节、字段数、单图像素数和同时处理任务数。
 - 前端与 API 同源，响应设置 CSP、`nosniff`、no-referrer、same-origin 和 `no-store`。
 - 上传字节与解码数组只存在于请求生命周期，不写临时上传目录；日志不记录字段内容、文件名或像素。
+- 浏览器只能提交服务端白名单目录中发现的模型 ID，不能提交清单路径、可执行命令或
+  任意算子路径；模型状态响应也不会泄露本机绝对路径。
 
 ## 扩展新算子
 

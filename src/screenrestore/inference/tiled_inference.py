@@ -23,8 +23,8 @@ def tiled_inference(
 ) -> np.ndarray:
     """分割 RGB 图、推理边缘 tile，并用线性权重消除接缝。"""
 
-    if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-        raise InferenceError("分块推理需要 H×W×3 RGB uint8 图像")
+    if image_rgb.dtype != np.float32 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+        raise InferenceError("分块推理需要 H×W×3 RGB float32 图像")
     if tile_size < 16 or not 0 <= overlap < tile_size or not 0 <= padding < tile_size // 2:
         raise InferenceError("tile_size/overlap/padding 参数无效")
     height, width = image_rgb.shape[:2]
@@ -45,8 +45,8 @@ def tiled_inference(
                 image_rgb, x, y, tile_width, tile_height, padding
             )
             inferred = infer_tile(extended)
-            if inferred.dtype != np.uint8 or inferred.ndim != 3 or inferred.shape[2] != 3:
-                raise InferenceError("tile 回调必须返回 RGB uint8 图像")
+            if inferred.dtype != np.float32 or inferred.ndim != 3 or inferred.shape[2] != 3:
+                raise InferenceError("tile 回调必须返回 RGB float32 图像")
             scale_y = inferred.shape[0] / extended.shape[0]
             scale_x = inferred.shape[1] / extended.shape[1]
             scale = round(scale_x)
@@ -89,7 +89,7 @@ def tiled_inference(
             context.report(completed / total, f"分块推理 {completed}/{total}")
     assert output_sum is not None and weight_sum is not None
     output = output_sum / np.maximum(weight_sum, 1e-8)
-    return np.clip(np.rint(output), 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(np.clip(output, 0.0, 1.0).astype(np.float32))
 
 
 def _tile_starts(length: int, tile_size: int, overlap: int) -> list[int]:
@@ -154,4 +154,3 @@ def _blend_weight(
         if fade_right:
             x_weight[-x_overlap:] = ramp[::-1]
     return np.outer(y_weight, x_weight)
-

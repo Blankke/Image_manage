@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+
 from tests.synthetic.generators import add_banding, add_color_moire
 
 
@@ -187,4 +188,3 @@ __all__ = [
     "test_chart",
     "tone_degradation",
 ]
-

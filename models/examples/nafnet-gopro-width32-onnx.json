@@ -2,6 +2,8 @@
   "id": "nafnet-gopro-width32-onnx-cpu",
   "name": "NAFNet GoPro width32 ONNX CPU（示例，未转换）",
   "type": "onnx",
+  "role": "restoration",
+  "task": "deblur",
   "model_path": "../onnx/nafnet-gopro-width32.onnx",
   "required_files": ["../onnx/nafnet-gopro-width32.onnx"],
   "supports_tiling": true,

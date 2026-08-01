@@ -11,7 +11,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float, to_float, to_uint8
 
 
 class DenoiseMode(StrEnum):
@@ -58,7 +58,7 @@ class DenoiseOperator(ImageOperator[DenoiseParameters]):
         params: DenoiseParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         context.cancellation.check()
         if params.strength == 0:
@@ -72,7 +72,7 @@ class DenoiseOperator(ImageOperator[DenoiseParameters]):
             )
         elif params.mode == DenoiseMode.NLM:
             # OpenCV 的接口以 BGR 命名但对通道顺序对称；为契约清晰仍显式转换。
-            image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            image_bgr = cv2.cvtColor(to_uint8(image), cv2.COLOR_RGB2BGR)
             search_window = 15 if context.preview else 21
             filtered_bgr = cv2.fastNlMeansDenoisingColored(
                 image_bgr,
@@ -82,17 +82,29 @@ class DenoiseOperator(ImageOperator[DenoiseParameters]):
                 7,
                 search_window,
             )
-            filtered = cv2.cvtColor(filtered_bgr, cv2.COLOR_BGR2RGB)
+            filtered = to_float(cv2.cvtColor(filtered_bgr, cv2.COLOR_BGR2RGB))
         else:
             ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
             y_channel, cr_channel, cb_channel = cv2.split(ycrcb)
             luma_sigma = max(0.1, params.radius * max(0.2, params.luma_strength / 5.0))
             chroma_sigma = max(0.1, params.radius * max(0.3, params.chroma_strength / 5.0))
             y_filtered = cv2.GaussianBlur(y_channel, (0, 0), luma_sigma)
-            cr_filtered = cv2.bilateralFilter(cr_channel, 0, params.color_sigma, chroma_sigma * 3)
-            cb_filtered = cv2.bilateralFilter(cb_channel, 0, params.color_sigma, chroma_sigma * 3)
+            sigma_color = params.color_sigma / 255.0
+            cr_filtered = cv2.bilateralFilter(
+                cr_channel,
+                0,
+                sigma_color,
+                chroma_sigma * 3,
+            )
+            cb_filtered = cv2.bilateralFilter(
+                cb_channel,
+                0,
+                sigma_color,
+                chroma_sigma * 3,
+            )
             filtered = cv2.cvtColor(
                 cv2.merge((y_filtered, cr_filtered, cb_filtered)), cv2.COLOR_YCrCb2RGB
             )
-        return cv2.addWeighted(image, 1.0 - params.strength, filtered, params.strength, 0)
-
+        return clip_float(
+            cv2.addWeighted(image, 1.0 - params.strength, filtered, params.strength, 0)
+        )

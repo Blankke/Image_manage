@@ -1,6 +1,6 @@
 # 可选模型插件
 
-模型插件不是 ScreenRestore 的必需组件。经典 CPU 流水线不导入 ONNX Runtime、OpenVINO、PyTorch、TensorFlow、CUDA 或 Vulkan。模型算子默认禁用；启用后填写清单路径即可从 GUI、项目或 CLI 的同一流水线运行。
+模型插件不是 ScreenRestore 的必需组件。经典 CPU 流水线不导入 ONNX Runtime、OpenVINO、PyTorch、TensorFlow、CUDA 或 Vulkan。`restoration` 与 `enhancement` 是两个独立节点；前者不得冒充超分，后者始终显示生成细节警告。模型算子默认禁用。
 
 ## 清单
 
@@ -11,6 +11,8 @@
   "id": "realesrgan-x2",
   "name": "Real-ESRGAN x2",
   "type": "external_process",
+  "role": "enhancement",
+  "task": "super_resolution",
   "executable": "../../plugins/realesrgan/realesrgan-ncnn-vulkan.exe",
   "arguments": ["-i", "{input}", "-o", "{output}", "-s", "2"],
   "supports_tiling": true,
@@ -20,7 +22,11 @@
 }
 ```
 
-占位符：`{input}`、`{output}`、`{temp}`、`{manifest_dir}`；`executable` 还可写成 `{python}`，明确使用当前已激活虚拟环境的解释器，跨 Windows/Linux 复用同一清单。参数以字符串数组传入，后端固定 `shell=False`。`{manifest_dir}` 便于清单可靠引用仓库内脚本和权重，不依赖应用启动目录。`required_files` 可列出相对清单目录的权重/参数文件，使设置页在缺权重时明确显示不可用。
+必填 `role` 为 `restoration` 或 `enhancement`；必填 `task` 限于去模糊、去摩尔纹、
+去条带、去噪、屏幕恢复、感知恢复和超分等已知任务。占位符包括 `{input}`、
+`{output}`、`{temp}`、`{manifest_dir}`、`{model_strength}`、`{denoise_strength}` 与
+`{output_scale}`；`executable` 还可写成 `{python}`，明确使用当前已激活虚拟环境的
+解释器。参数以字符串数组传入，后端固定 `shell=False`。
 
 ## 可复现安装
 
@@ -34,7 +40,7 @@ PowerShell -ExecutionPolicy Bypass -File scripts/install_optional_models.ps1 -Pl
 安装器只写入 Git 忽略的 `models/weights/` 与 `plugins/realesrgan/`，并核验项目维护的
 SHA-256。它不会改变核心 `pyproject.toml` 依赖，也不会把权重打入 PyInstaller 包。
 
-安装后，在“可选模型恢复/超分”步骤中填写以下清单之一：
+安装后，在对应的“AI 恢复模型”或“AI 感知增强”步骤中填写以下清单之一：
 
 ```text
 models/examples/nafnet-gopro-width32-torch.json
@@ -52,7 +58,8 @@ NAFNet 使用 GoPro width32 官方权重，输出保持原分辨率，适合实�
 
 Real-ESRGAN 使用 general-x4v3 强/弱降噪官方权重，以 DNI 控制降噪，再通过强度
 与 Lanczos 基线混合。它对印刷插画线条和头发轮廓提升明显，但可能产生绘画感和原图
-不存在的纹理。默认清单只给 0.65 强度，不应把其输出描述为真实原始像素。
+不存在的纹理。网页和 8 组基准默认使用 0.20 的保守强度，不应把其输出描述为真实
+原始像素。
 
 可绕过 GUI 直接复现：
 
@@ -134,5 +141,10 @@ python -m pip install -e ".[inference-openvino]"
 通用工具支持 tile size、overlap、padding、边缘反射填充、整数倍率输出、线性加权融合、进度和取消。测试覆盖不规则边缘 tile 的 1× 原样合并与 2× 放大，要求逐像素一致。
 
 ## 安全提示
+
+本地网页不会接受浏览器提交的清单路径、可执行文件或参数模板。启动服务时用
+`--model-directory` 指定一个或多个允许目录，浏览器只能从 `GET /api/v1/models`
+返回的 ID 中选择；响应不返回本机绝对路径。桌面/CLI 的直接路径配置只适用于信任的
+本地用户。
 
 模型和外部可执行文件具有本机代码权限。仅从可信官方来源安装并校验哈希；ScreenRestore 不自动下载、升级或执行未由清单明确指定的文件。

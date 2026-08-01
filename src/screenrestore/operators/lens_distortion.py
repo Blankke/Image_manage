@@ -15,6 +15,8 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
+from ._utils import clip_float, require_rgb_float
+
 
 class LensModel(StrEnum):
     """OpenCV 支持的两种镜头模型。"""
@@ -345,12 +347,13 @@ class LensDistortionOperator(ImageOperator[LensDistortionParameters]):
         params: LensDistortionParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
+        require_rgb_float(image)
         self.validate(params)
         context.report(0.05, "准备镜头畸变校正")
         corrected, metadata = undistort_lens(image, params)
         context.metadata["lens_distortion"] = metadata
         context.report(1.0, "镜头畸变校正完成")
-        return corrected
+        return clip_float(corrected)
 
 
 def _calibrate_fisheye(
@@ -428,5 +431,5 @@ def _calibration_errors(
 
 
 def _validate_rgb(image: np.ndarray) -> None:
-    if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError("镜头模块需要 H×W×3 RGB uint8 图像")
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype not in (np.uint8, np.float32):
+        raise ValueError("镜头模块需要 H×W×3 RGB uint8/float32 图像")

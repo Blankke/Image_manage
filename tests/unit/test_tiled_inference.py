@@ -10,7 +10,7 @@ from screenrestore.inference.tiled_inference import tiled_inference
 
 def test_tiled_identity_has_no_seams_on_edge_tiles() -> None:
     generator = np.random.default_rng(11)
-    image = generator.integers(0, 256, (137, 191, 3), dtype=np.uint8)
+    image = generator.random((137, 191, 3), dtype=np.float32)
     output = tiled_inference(
         image,
         lambda tile: tile.copy(),
@@ -19,11 +19,14 @@ def test_tiled_identity_has_no_seams_on_edge_tiles() -> None:
         overlap=17,
         padding=9,
     )
-    assert np.array_equal(output, image)
+    assert np.allclose(output, image, atol=1e-6)
 
 
 def test_tiled_inference_supports_two_times_output() -> None:
-    image = np.arange(45 * 71 * 3, dtype=np.uint16).reshape(45, 71, 3).astype(np.uint8)
+    image = (
+        np.arange(45 * 71 * 3, dtype=np.uint16).reshape(45, 71, 3).astype(np.float32)
+        % 256
+    ) / 255.0
     output = tiled_inference(
         image,
         lambda tile: np.repeat(np.repeat(tile, 2, axis=0), 2, axis=1),
@@ -33,5 +36,4 @@ def test_tiled_inference_supports_two_times_output() -> None:
         padding=4,
     )
     expected = np.repeat(np.repeat(image, 2, axis=0), 2, axis=1)
-    assert np.array_equal(output, expected)
-
+    assert np.allclose(output, expected, atol=1e-6)

@@ -41,7 +41,7 @@ class SettingsDialog(QDialog):
             available, reason = _availability(manifest)
             status = "可用" if available else "不可用"
             item = QListWidgetItem(
-                f"{manifest.name} [{manifest.type}] — {status}\n"
+                f"{manifest.name} [{manifest.role.value}/{manifest.task}/{manifest.type}] — {status}\n"
                 f"许可证：{manifest.license}  {reason}"
             )
             item.setData(Qt.ItemDataRole.UserRole, manifest.id)
@@ -61,4 +61,3 @@ def _availability(manifest: ModelManifest) -> tuple[bool, str]:
     if manifest.type == "onnx":
         return OnnxBackend(manifest).is_available()
     return OpenVinoBackend(manifest).is_available()
-

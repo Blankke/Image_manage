@@ -2,6 +2,8 @@
   "id": "realesrgan-x2",
   "name": "Real-ESRGAN x2（示例，未安装）",
   "type": "external_process",
+  "role": "enhancement",
+  "task": "super_resolution",
   "executable": "../../plugins/realesrgan/realesrgan-ncnn-vulkan.exe",
   "arguments": [
     "-i", "{input}",

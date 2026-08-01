@@ -84,17 +84,23 @@ class ImagePipeline:
         context: ProcessingContext | None = None,
         source_id: str | None = None,
     ) -> np.ndarray:
-        """从输入处理到末端；缓存命中时跳过对应节点。"""
+        """把加载图转换一次 float32，再以该精度处理到末端。"""
 
-        if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-            raise ValueError("流水线输入必须是 H×W×3 RGB uint8 图像")
+        if image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+            raise ValueError("流水线输入必须是 H×W×3 RGB 图像")
+        if image_rgb.dtype == np.uint8:
+            current = np.ascontiguousarray(image_rgb.astype(np.float32) / 255.0)
+        elif image_rgb.dtype == np.float32:
+            current = np.ascontiguousarray(image_rgb.copy())
+        else:
+            raise ValueError("流水线输入仅支持 RGB uint8 或 float32")
+        _validate_working_image(current, "流水线输入")
         active_context = context or ProcessingContext()
         resolved_source = source_id or _image_signature(image_rgb)
         enabled_states = [state for state in self.states if state.enabled]
         total_cost = sum(state.operator.estimate_cost(image_rgb.shape) for state in enabled_states) or 1.0
         completed_cost = 0.0
         cumulative = resolved_source
-        current = image_rgb
         self.last_timings = {}
 
         for index, state in enumerate(self.states):
@@ -139,8 +145,12 @@ class ImagePipeline:
                 metadata=active_context.metadata,
             )
             result = state.operator.apply(current, state.params, node_context)
-            if result.dtype != np.uint8 or result.ndim != 3 or result.shape[2] != 3:
-                raise TypeError(f"算子 {state.operator.id} 违反 RGB uint8 输出契约")
+            try:
+                _validate_working_image(result, f"算子 {state.operator.id} 输出")
+            except ValueError as exc:
+                raise TypeError(
+                    f"算子 {state.operator.id} 违反 RGB float32 [0,1] 输出契约"
+                ) from exc
             active_context.cancellation.check()
             elapsed = time.perf_counter() - started
             self.last_timings[state.operator.id] = elapsed
@@ -309,3 +319,14 @@ def _image_signature(image: np.ndarray) -> str:
     digest.update(str((image.shape, image.dtype.str)).encode())
     digest.update(memoryview(np.ascontiguousarray(image)))
     return digest.hexdigest()
+
+
+def _validate_working_image(image: np.ndarray, label: str) -> None:
+    """验证内部唯一图像契约，防止某个算子重新引入量化或越界。"""
+
+    if image.dtype != np.float32 or image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError(f"{label}必须是 H×W×3 RGB float32")
+    if not np.all(np.isfinite(image)):
+        raise ValueError(f"{label}包含非有限值")
+    if image.size and (float(image.min()) < 0.0 or float(image.max()) > 1.0):
+        raise ValueError(f"{label}必须位于 [0,1]")

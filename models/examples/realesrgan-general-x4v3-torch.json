@@ -1,7 +1,9 @@
 {
   "id": "realesrgan-general-x4v3-torch",
-  "name": "Real-ESRGAN general-x4v3 PyTorch（示例，未安装）",
+  "name": "Real-ESRGAN general-x4v3 PyTorch（可选本地模型）",
   "type": "external_process",
+  "role": "enhancement",
+  "task": "perceptual_restoration",
   "executable": "{python}",
   "arguments": [
     "{manifest_dir}/../../scripts/realesrgan_torch_plugin.py",
@@ -9,9 +11,9 @@
     "--output", "{output}",
     "--weights", "{manifest_dir}/../weights/realesr-general-x4v3.pth",
     "--weak-weights", "{manifest_dir}/../weights/realesr-general-wdn-x4v3.pth",
-    "--denoise-strength", "0.5",
-    "--strength", "0.65",
-    "--outscale", "2"
+    "--denoise-strength", "{denoise_strength}",
+    "--strength", "{model_strength}",
+    "--outscale", "{output_scale}"
   ],
   "supports_tiling": true,
   "required_files": [

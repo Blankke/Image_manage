@@ -15,6 +15,8 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
+from ._utils import clip_float, require_rgb_float
+
 
 class AspectRatioMode(StrEnum):
     """透视输出比例模式。"""
@@ -341,6 +343,7 @@ class GeometryOperator(ImageOperator[GeometryParameters]):
         params: GeometryParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
+        require_rgb_float(image)
         self.validate(params)
         context.report(0.05, "准备透视校正")
         height, width = image.shape[:2]
@@ -358,7 +361,7 @@ class GeometryOperator(ImageOperator[GeometryParameters]):
         )
         context.metadata["geometry_matrix"] = matrix.tolist()
         context.report(1.0, "透视校正完成")
-        return output
+        return clip_float(output)
 
 
 def _candidate_scores(
@@ -683,5 +686,5 @@ def estimate_rectified_aspect_ratio(
 
 
 def _validate_rgb(image: np.ndarray) -> None:
-    if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError("几何模块需要 H×W×3 RGB uint8 图像")
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype not in (np.uint8, np.float32):
+        raise ValueError("几何模块需要 H×W×3 RGB uint8/float32 图像")

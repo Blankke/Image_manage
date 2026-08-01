@@ -48,11 +48,10 @@ class OpenVinoBackend(InferenceBackend):
                     str(self.manifest.resolve_path(self.manifest.model_path or ""))
                 )
                 self._compiled = core.compile_model(model, "CPU")
-            tensor = image_rgb.astype(np.float32).transpose(2, 0, 1)[None] / 255.0
+            tensor = image_rgb.transpose(2, 0, 1)[None]
             result = self._compiled([tensor])
             output = next(iter(result.values()))
         except Exception as exc:  # noqa: BLE001 - 可选运行时错误统一转换
             raise InferenceError(f"OpenVINO 推理失败：{exc}") from exc
         context.cancellation.check()
         return _tensor_to_rgb(output)
-

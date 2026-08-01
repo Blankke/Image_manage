@@ -114,6 +114,49 @@
             <button id="applyCurve" class="secondary" type="button">生成对称网格起点</button>
           </details>
 
+          <details open>
+            <summary><span>04</span>恢复质量与可选 AI</summary>
+            <label>处理模式
+              <select id="processingMode">
+                <option value="fidelity">忠实恢复（默认）</option>
+                <option value="ai_enhanced">AI 增强</option>
+              </select>
+            </label>
+            <div class="field-grid two compact">
+              <label>去摩尔纹
+                <select id="demoirePolicy">
+                  <option value="preset">自适应（推荐）</option>
+                  <option value="strong">增强去纹</option>
+                  <option value="off">关闭</option>
+                </select>
+              </label>
+              <label>高光光晕
+                <select id="dehaloPolicy">
+                  <option value="preset">按场景预设</option>
+                  <option value="gated">证据门控</option>
+                  <option value="strong">增强抑制</option>
+                  <option value="off">关闭</option>
+                </select>
+              </label>
+            </div>
+            <p class="field-note">增强去纹适合规则屏幕栅格；高光光晕默认不会删除电影原片已有的轮廓光，可在对比视图确认后再增强。</p>
+            <div id="aiControls" class="ai-controls hidden">
+              <label>本地模型
+                <select id="aiModel"><option value="">正在发现模型…</option></select>
+              </label>
+              <label>AI 强度 <output id="aiStrengthValue">0.25</output>
+                <input id="aiStrength" type="range" min="0" max="1" step="0.05" value="0.25">
+              </label>
+              <label>模型降噪 <output id="aiDenoiseValue">0.25</output>
+                <input id="aiDenoise" type="range" min="0" max="1" step="0.05" value="0.25">
+              </label>
+              <label>输出倍率
+                <select id="aiOutscale"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
+              </label>
+              <p class="ai-warning">AI 增强会依据模型先验生成高频纹理，结果不保证等于原始数字帧。</p>
+            </div>
+          </details>
+
           <div class="action-stack">
             <button id="restoreButton" class="primary" type="button" disabled>开始恢复</button>
             <button id="downloadButton" class="secondary" type="button" disabled>下载 PNG</button>
@@ -132,6 +175,21 @@
               <button id="resetGeometry" type="button" disabled>重置当前</button>
             </div>
           </div>
+          <div id="resultToolbar" class="result-toolbar hidden">
+            <div class="segmented result-tabs" role="group" aria-label="结果阶段">
+              <button data-result="original" type="button">Original</button>
+              <button data-result="geometry" type="button">Geometry</button>
+              <button data-result="fidelity" class="active" type="button">Fidelity</button>
+              <button data-result="ai" type="button" disabled>AI Enhanced</button>
+            </div>
+            <label>比较
+              <select id="comparisonMode"><option value="single">单图</option><option value="split">拖动分割</option><option value="side">并排</option></select>
+            </label>
+            <label id="splitControl" class="hidden">分割线
+              <input id="splitPosition" type="range" min="0" max="1" step="0.01" value="0.5">
+            </label>
+            <button id="actualPixels" type="button">100%</button>
+          </div>
           <div id="canvasStage" class="canvas-stage empty">
             <canvas id="editorCanvas" width="960" height="600"></canvas>
             <div id="emptyHint" class="empty-hint">
@@ -145,7 +203,7 @@
           </div>
 
           <div class="diagnostics-card">
-            <div><p class="section-number">04</p><h3>可验证诊断</h3></div>
+            <div><p class="section-number">05</p><h3>可验证诊断</h3></div>
             <pre id="diagnostics">处理后将显示多帧使用数量、实际观测补回比例、未解决比例和各算子耗时。</pre>
           </div>
           <div class="truth-note">

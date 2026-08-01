@@ -11,13 +11,14 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class DemoireMode(StrEnum):
     """传统去摩尔纹模式。"""
 
     CHROMA = "chroma"
+    JOINT_EDGE_AWARE = "joint_edge_aware"
     FREQUENCY = "frequency_experimental"
 
 
@@ -34,6 +35,12 @@ class DemoireParameters(ParameterModel):
     notch_radius: float = 7.0
     notch_depth: float = 0.75
     manual_notches: list[list[float]] = field(default_factory=list)
+    luma_sigma_color: float = 0.06
+    structural_edge_sigma: float = 1.35
+    chroma_relative_strength: float = 0.7
+    periodicity_threshold: float = 0.2
+    periodicity_scale: float = 3.0
+    minimum_filter_weight: float = 0.3
 
     def validate(self) -> None:
         require_range("strength", self.strength, 0.0, 1.0)
@@ -42,6 +49,12 @@ class DemoireParameters(ParameterModel):
         require_range("heat_threshold", self.heat_threshold, 0.0, 0.9)
         require_range("notch_radius", self.notch_radius, 1.0, 50.0)
         require_range("notch_depth", self.notch_depth, 0.0, 1.0)
+        require_range("luma_sigma_color", self.luma_sigma_color, 0.005, 0.25)
+        require_range("structural_edge_sigma", self.structural_edge_sigma, 0.4, 8.0)
+        require_range("chroma_relative_strength", self.chroma_relative_strength, 0.0, 1.0)
+        require_range("periodicity_threshold", self.periodicity_threshold, 0.0, 0.95)
+        require_range("periodicity_scale", self.periodicity_scale, 1.0, 12.0)
+        require_range("minimum_filter_weight", self.minimum_filter_weight, 0.0, 1.0)
         if len(self.manual_notches) > 64:
             raise ValueError("手工陷波点不能超过 64 个")
         for point in self.manual_notches:
@@ -65,16 +78,26 @@ class DemoireOperator(ImageOperator[DemoireParameters]):
         params: DemoireParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.strength == 0:
             return image.copy()
-        context.report(0.1, "分析摩尔纹热度")
-        heat = moire_heatmap(image)
-        context.metadata["moire_heatmap"] = heat
-        if params.mode == DemoireMode.FREQUENCY:
+        context.report(0.1, "分析摩尔纹结构")
+        if params.mode == DemoireMode.JOINT_EDGE_AWARE:
+            output, processing_mask = _joint_edge_aware_demoire(image, params)
+            # 联合模式显示实际处理权重，比旧热度图更能解释哪些区域被平滑。
+            context.metadata["moire_heatmap"] = processing_mask
+            context.metadata["demoire"] = {
+                "mode": params.mode.value,
+                "mean_processing_weight": float(np.mean(processing_mask)),
+                "p95_processing_weight": float(np.quantile(processing_mask, 0.95)),
+            }
+        elif params.mode == DemoireMode.FREQUENCY:
+            context.metadata["moire_heatmap"] = moire_heatmap(image)
             output = _frequency_demoire(image, params, context)
         else:
+            heat = moire_heatmap(image)
+            context.metadata["moire_heatmap"] = heat
             output = _chroma_demoire(image, heat, params)
         context.report(1.0, "去摩尔纹完成")
         return output
@@ -83,8 +106,8 @@ class DemoireOperator(ImageOperator[DemoireParameters]):
 def moire_heatmap(image_rgb: np.ndarray) -> np.ndarray:
     """综合局部色彩变化、高频能量、周期峰和边缘不一致度。"""
 
-    require_rgb_u8(image_rgb)
-    ycrcb = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32) / 255.0
+    require_rgb_float(image_rgb)
+    ycrcb = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2YCrCb)
     luminance = ycrcb[..., 0]
     chroma = ycrcb[..., 1:]
     luminance_low = cv2.GaussianBlur(luminance, (0, 0), 1.2)
@@ -110,14 +133,14 @@ def moire_heatmap(image_rgb: np.ndarray) -> np.ndarray:
 def frequency_spectrum(image_rgb: np.ndarray, max_edge: int = 768) -> np.ndarray:
     """返回用于 UI 显示的对数亮度频谱 RGB uint8 图。"""
 
-    require_rgb_u8(image_rgb)
+    require_rgb_float(image_rgb)
     height, width = image_rgb.shape[:2]
     scale = min(1.0, max_edge / max(height, width))
     if scale < 1:
         image_rgb = cv2.resize(
             image_rgb, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA
         )
-    luminance = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    luminance = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
     window = np.outer(np.hanning(luminance.shape[0]), np.hanning(luminance.shape[1])).astype(np.float32)
     spectrum = np.log1p(np.abs(np.fft.fftshift(np.fft.fft2(luminance * window))))
     normalized = (_robust_normalize(spectrum) * 255).astype(np.uint8)
@@ -173,8 +196,10 @@ def _chroma_demoire(
     ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
     luminance, cr, cb = cv2.split(ycrcb)
     sigma = params.chroma_radius
-    cr_filtered = cv2.bilateralFilter(cr, 0, max(8.0, sigma * 18), max(1.0, sigma * 2.5))
-    cb_filtered = cv2.bilateralFilter(cb, 0, max(8.0, sigma * 18), max(1.0, sigma * 2.5))
+    sigma_color = max(8.0, sigma * 18) / 255.0
+    sigma_space = max(1.0, sigma * 2.5)
+    cr_filtered = cv2.bilateralFilter(cr, 0, sigma_color, sigma_space)
+    cb_filtered = cv2.bilateralFilter(cb, 0, sigma_color, sigma_space)
     gradient_x = cv2.Sobel(luminance, cv2.CV_32F, 1, 0, ksize=3)
     gradient_y = cv2.Sobel(luminance, cv2.CV_32F, 0, 1, ksize=3)
     edge = _robust_normalize(np.hypot(gradient_x, gradient_y))
@@ -182,12 +207,113 @@ def _chroma_demoire(
         (heat - params.heat_threshold) / max(0.05, 1.0 - params.heat_threshold), 0.0, 1.0
     )
     blend = params.strength * active_heat * (1.0 - params.edge_protection * edge)
-    cr_mixed = cr.astype(np.float32) * (1 - blend) + cr_filtered.astype(np.float32) * blend
-    cb_mixed = cb.astype(np.float32) * (1 - blend) + cb_filtered.astype(np.float32) * blend
-    output = cv2.merge(
-        (luminance, np.clip(cr_mixed, 0, 255).astype(np.uint8), np.clip(cb_mixed, 0, 255).astype(np.uint8))
+    cr_mixed = cr * (1 - blend) + cr_filtered * blend
+    cb_mixed = cb * (1 - blend) + cb_filtered * blend
+    output = cv2.merge((luminance, cr_mixed, cb_mixed))
+    return clip_float(cv2.cvtColor(output, cv2.COLOR_YCrCb2RGB))
+
+
+def _joint_edge_aware_demoire(
+    image: np.ndarray,
+    params: DemoireParameters,
+) -> tuple[np.ndarray, np.ndarray]:
+    """联合平滑亮度/色度小振荡，同时保护大尺度结构边缘。"""
+
+    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
+    luminance = ycrcb[..., 0]
+    # 先在较大尺度求结构边缘，使 2～4 px 的屏幕栅格不会被误当成真实轮廓。
+    structural = cv2.GaussianBlur(
+        luminance,
+        (0, 0),
+        params.structural_edge_sigma,
     )
-    return cv2.cvtColor(output, cv2.COLOR_YCrCb2RGB)
+    gradient_x = cv2.Sobel(structural, cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(structural, cv2.CV_32F, 0, 1, ksize=3)
+    structural_edge = np.square(_percentile_normalize(np.hypot(gradient_x, gradient_y), 0, 95))
+
+    # 结构张量衡量局部高频是否长期保持同一方向；规则屏幕栅格会得到高相干度，
+    # 多方向自然纹理则只保留最低处理权重，避免把建筑、毛发和织物整体磨平。
+    high_frequency = luminance - cv2.GaussianBlur(luminance, (0, 0), 1.2)
+    high_x = cv2.Sobel(high_frequency, cv2.CV_32F, 1, 0, ksize=3)
+    high_y = cv2.Sobel(high_frequency, cv2.CV_32F, 0, 1, ksize=3)
+    tensor_xx = cv2.GaussianBlur(
+        np.square(high_x),
+        (0, 0),
+        params.periodicity_scale,
+    )
+    tensor_yy = cv2.GaussianBlur(
+        np.square(high_y),
+        (0, 0),
+        params.periodicity_scale,
+    )
+    tensor_xy = cv2.GaussianBlur(
+        high_x * high_y,
+        (0, 0),
+        params.periodicity_scale,
+    )
+    coherence = np.sqrt(
+        np.square(tensor_xx - tensor_yy) + 4.0 * np.square(tensor_xy)
+    ) / (tensor_xx + tensor_yy + 1e-8)
+    coherence = np.power(
+        np.clip(
+            (coherence - params.periodicity_threshold)
+            / max(1e-6, 1.0 - params.periodicity_threshold),
+            0.0,
+            1.0,
+        ),
+        1.5,
+    )
+    periodic_energy = _percentile_normalize(
+        np.sqrt(tensor_xx + tensor_yy),
+        15,
+        95,
+    )
+    periodicity = cv2.GaussianBlur(coherence * periodic_energy, (0, 0), 1.0)
+    adaptive_weight = params.minimum_filter_weight + (
+        1.0 - params.minimum_filter_weight
+    ) * periodicity
+    processing_mask = (
+        params.strength
+        * adaptive_weight
+        * (1.0 - params.edge_protection * structural_edge)
+    )
+
+    filtered_luminance = cv2.bilateralFilter(
+        luminance,
+        0,
+        params.luma_sigma_color,
+        params.chroma_radius,
+    )
+    ycrcb[..., 0] = (
+        luminance * (1.0 - processing_mask) + filtered_luminance * processing_mask
+    )
+    chroma_weight = processing_mask * params.chroma_relative_strength
+    for channel in (1, 2):
+        source = ycrcb[..., channel]
+        filtered = cv2.bilateralFilter(
+            source,
+            0,
+            max(0.03, params.luma_sigma_color * 1.4),
+            params.chroma_radius * 1.25,
+        )
+        ycrcb[..., channel] = source * (1.0 - chroma_weight) + filtered * chroma_weight
+    output = clip_float(cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB))
+    return output, np.ascontiguousarray(processing_mask.astype(np.float32))
+
+
+def _percentile_normalize(
+    values: np.ndarray,
+    low_percentile: float,
+    high_percentile: float,
+) -> np.ndarray:
+    """用明确分位范围归一化局部能量，避免极少异常点支配掩膜。"""
+
+    low, high = np.percentile(values, (low_percentile, high_percentile))
+    return np.clip(
+        (values - low) / max(1e-6, float(high - low)),
+        0.0,
+        1.0,
+    ).astype(np.float32)
 
 
 def _frequency_demoire(
@@ -195,7 +321,7 @@ def _frequency_demoire(
     params: DemoireParameters,
     context: ProcessingContext,
 ) -> np.ndarray:
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb).astype(np.float32) / 255.0
+    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
     points = [list(point) for point in params.manual_notches]
     if params.auto_frequency:
         points.extend(detect_frequency_peaks(ycrcb[..., 0]))
@@ -212,9 +338,8 @@ def _frequency_demoire(
         filtered_channels.append(
             ycrcb[..., index] * (1.0 - channel_strength) + filtered * channel_strength
         )
-    output = np.stack(filtered_channels, axis=2)
-    output = np.clip(np.rint(output * 255), 0, 255).astype(np.uint8)
-    return cv2.cvtColor(output, cv2.COLOR_YCrCb2RGB)
+    output = np.stack(filtered_channels, axis=2).astype(np.float32)
+    return clip_float(cv2.cvtColor(output, cv2.COLOR_YCrCb2RGB))
 
 
 def _gaussian_notch(
@@ -259,4 +384,3 @@ def _global_periodicity_score(luminance: np.ndarray) -> float:
     peak = float(np.percentile(spectrum, 99.9))
     baseline = float(np.percentile(spectrum, 90)) + 1e-6
     return float(np.clip((peak / baseline - 1.0) / 8.0, 0.0, 1.0))
-

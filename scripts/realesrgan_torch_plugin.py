@@ -133,15 +133,26 @@ def main(argv: list[str] | None = None) -> int:
     model.load_state_dict(parameters, strict=True)
     model.eval()
     with Image.open(args.input) as opened:
-        source = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
+        source_u8 = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
+    source = source_u8.astype(np.float32) / 255.0
+    # 网络固定产生 4×，但在每个 tile 内尽早缩到所需整数倍率，避免 1× 网页输出仍
+    # 分配整幅 4× 浮点累加缓冲区。非整数倍率先取上整，拼接后再做一次最终缩放。
+    inference_scale = int(np.ceil(args.outscale))
 
     def infer_tile(tile_rgb: np.ndarray) -> np.ndarray:
         tensor = torch.from_numpy(np.transpose(tile_rgb, (2, 0, 1)).copy()).float()
-        tensor = tensor.unsqueeze(0) / 255.0
+        tensor = tensor.unsqueeze(0)
         with torch.inference_mode():
             inferred = model(tensor).squeeze(0).clamp_(0.0, 1.0)
-            array = inferred.mul(255.0).round().to(torch.uint8).cpu().numpy()
-        return np.transpose(array, (1, 2, 0)).copy()
+            array = inferred.cpu().numpy().astype(np.float32, copy=False)
+        output = np.transpose(array, (1, 2, 0)).copy()
+        if inference_scale != 4:
+            output = cv2.resize(
+                output,
+                (tile_rgb.shape[1] * inference_scale, tile_rgb.shape[0] * inference_scale),
+                interpolation=cv2.INTER_AREA,
+            )
+        return np.ascontiguousarray(output, dtype=np.float32)
 
     context = ProcessingContext(
         preview=False,
@@ -164,16 +175,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.strength < 1.0:
         baseline = cv2.resize(source, target_size, interpolation=cv2.INTER_LANCZOS4)
         output = np.clip(
-            np.rint(
-                baseline.astype(np.float32) * (1.0 - args.strength)
-                + output.astype(np.float32) * args.strength
-            ),
-            0,
-            255,
-        ).astype(np.uint8)
+            baseline * (1.0 - args.strength) + output * args.strength,
+            0.0,
+            1.0,
+        )
+    output_u8 = np.clip(np.rint(output * 255.0), 0, 255).astype(np.uint8)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_name(f".{args.output.stem}.tmp{args.output.suffix}")
-    Image.fromarray(output, "RGB").save(temporary)
+    Image.fromarray(output_u8, "RGB").save(temporary)
     temporary.replace(args.output)
     _print_progress(1.0, f"完成：{args.output}")
     return 0

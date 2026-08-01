@@ -50,8 +50,7 @@ def encode_image_bytes(
 ) -> bytes:
     """为 Web 响应编码图像，不写临时文件或携带源图隐私元数据。"""
 
-    if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-        raise ImageExportError("编码需要 H×W×3 RGB uint8 图像")
+    image_u8 = _as_uint8_rgb(image_rgb, "编码")
     if not 1 <= quality <= 100:
         raise ImageExportError("编码质量必须位于 1..100")
     options: dict[str, object] = {}
@@ -61,7 +60,7 @@ def encode_image_bytes(
         options.update(optimize=True, subsampling=0)
     stream = BytesIO()
     try:
-        Image.fromarray(image_rgb, "RGB").save(
+        Image.fromarray(image_u8, "RGB").save(
             stream,
             format=output_format.value,
             **options,
@@ -97,8 +96,7 @@ def export_image(
 ) -> Path:
     """原子编码 RGB uint8 图像，并按策略保留 EXIF/删除 GPS。"""
 
-    if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-        raise ImageExportError("导出需要 H×W×3 RGB uint8 图像")
+    image_u8 = _as_uint8_rgb(image_rgb, "导出")
     options.validate()
     destination = Path(path).expanduser().resolve()
     if destination.exists() and not options.overwrite:
@@ -121,7 +119,7 @@ def export_image(
             delete=False,
         ) as stream:
             temp_path = Path(stream.name)
-        Image.fromarray(image_rgb, "RGB").save(
+        Image.fromarray(image_u8, "RGB").save(
             temp_path,
             format=options.format.value,
             **save_options,
@@ -148,3 +146,17 @@ def _read_export_exif(
             return exif.tobytes()
     except OSError:
         return None
+
+
+def _as_uint8_rgb(image: np.ndarray, action: str) -> np.ndarray:
+    """只在编码边界量化 float32，加载得到的 uint8 也可直接导出。"""
+
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ImageExportError(f"{action}需要 H×W×3 RGB 图像")
+    if image.dtype == np.uint8:
+        return np.ascontiguousarray(image)
+    if image.dtype != np.float32:
+        raise ImageExportError(f"{action}仅支持 RGB uint8 或 float32")
+    if not np.all(np.isfinite(image)):
+        raise ImageExportError(f"{action}图像包含非有限值")
+    return np.clip(np.rint(image * 255.0), 0, 255).astype(np.uint8)

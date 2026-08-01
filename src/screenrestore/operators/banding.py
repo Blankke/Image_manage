@@ -9,10 +9,11 @@ import cv2
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
+from screenrestore.core.color import linear_to_srgb, srgb_to_linear
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class BandingDirection(StrEnum):
@@ -63,14 +64,14 @@ class BandingOperator(ImageOperator[BandingParameters]):
         params: BandingParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.strength == 0 and params.broad_haze_strength == 0:
             return image.copy()
         context.report(0.1, "估计条带方向")
         haze_corrected, haze_profile = _suppress_broad_haze(image, params)
         lab = cv2.cvtColor(haze_corrected, cv2.COLOR_RGB2LAB)
-        lightness = lab[..., 0].astype(np.float32) / 255.0
+        lightness = lab[..., 0] / 100.0
         # 二维低通先压制文字、细线和像素级纹理，避免其支配行列统计。
         content_suppressed = cv2.GaussianBlur(lightness, (0, 0), 2.2)
         row_profile = np.mean(content_suppressed, axis=1)
@@ -100,7 +101,7 @@ class BandingOperator(ImageOperator[BandingParameters]):
         corrected_lightness = np.clip(lightness * gain_field, 0.0, 1.0)
         mixed = lightness * (1.0 - params.strength) + corrected_lightness * params.strength
         output_lab = lab.copy()
-        output_lab[..., 0] = np.clip(np.rint(mixed * 255.0), 0, 255).astype(np.uint8)
+        output_lab[..., 0] = np.clip(mixed * 100.0, 0.0, 100.0)
         context.metadata["banding"] = {
             "direction": direction.value,
             "horizontal_energy": row_energy,
@@ -112,7 +113,7 @@ class BandingOperator(ImageOperator[BandingParameters]):
             "broad_haze": haze_profile.tolist() if params.show_curve else [],
         }
         context.report(1.0, "条带校正完成")
-        return cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB)
+        return clip_float(cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB))
 
 
 def _suppress_broad_haze(
@@ -131,7 +132,7 @@ def _suppress_broad_haze(
     empty = np.zeros(height, dtype=np.float32)
     if params.broad_haze_strength == 0:
         return image_rgb.copy(), empty
-    source = image_rgb.astype(np.float32) / 255.0
+    source = srgb_to_linear(image_rgb)
     luminance = np.sum(
         source * np.array([0.2126, 0.7152, 0.0722], np.float32),
         axis=2,
@@ -158,7 +159,7 @@ def _suppress_broad_haze(
         0.0,
         1.0,
     )
-    return np.clip(np.rint(restored * 255.0), 0, 255).astype(np.uint8), haze
+    return linear_to_srgb(clip_float(restored)), haze
 
 
 def _separate_profile(profile: np.ndarray, smooth_scale: float) -> tuple[np.ndarray, np.ndarray, float]:

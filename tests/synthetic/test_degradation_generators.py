@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+
 from tests.synthetic.degradations import (
     defocus_blur,
     gaussian_noise,
@@ -37,4 +38,3 @@ def test_all_degradations_preserve_rgb_uint8_contract() -> None:
     for degraded in degraded_images:
         assert degraded.shape == chart.shape
         assert degraded.dtype == np.uint8
-

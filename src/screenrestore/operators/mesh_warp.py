@@ -16,6 +16,8 @@ from scipy.interpolate import RectBivariateSpline
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
+from ._utils import clip_float, require_rgb_float
+
 
 class MeshInterpolation(StrEnum):
     """最终像素重采样方式。"""
@@ -198,12 +200,13 @@ class MeshWarpOperator(ImageOperator[MeshWarpParameters]):
         params: MeshWarpParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
+        require_rgb_float(image)
         self.validate(params)
         context.report(0.05, "准备弯曲银幕网格")
         output, metadata = warp_mesh(image, params)
         context.metadata["mesh_warp"] = metadata
         context.report(1.0, "弯曲银幕校正完成")
-        return output
+        return clip_float(output)
 
 
 def _validate_non_folded(points: np.ndarray) -> None:
@@ -228,5 +231,5 @@ def _validate_non_folded(points: np.ndarray) -> None:
 
 
 def _validate_rgb(image: np.ndarray) -> None:
-    if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError("网格模块需要 H×W×3 RGB uint8 图像")
+    if image.ndim != 3 or image.shape[2] != 3 or image.dtype not in (np.uint8, np.float32):
+        raise ValueError("网格模块需要 H×W×3 RGB uint8/float32 图像")

@@ -41,8 +41,8 @@ class ExternalProcessBackend(InferenceBackend):
     def run(self, image_rgb: np.ndarray, context: ProcessingContext) -> np.ndarray:
         """写入临时 PNG、运行外部程序、读取结果并自动清理。"""
 
-        if image_rgb.dtype != np.uint8 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-            raise InferenceError("外部后端需要 H×W×3 RGB uint8 图像")
+        if image_rgb.dtype != np.float32 or image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
+            raise InferenceError("外部后端需要 H×W×3 RGB float32 图像")
         available, reason = self.is_available()
         if not available:
             raise InferenceError(reason)
@@ -52,7 +52,8 @@ class ExternalProcessBackend(InferenceBackend):
             temp_root = Path(temp_directory)
             input_path = temp_root / "input.png"
             output_path = temp_root / "output.png"
-            Image.fromarray(image_rgb, "RGB").save(input_path, format="PNG")
+            input_u8 = np.clip(np.rint(image_rgb * 255.0), 0, 255).astype(np.uint8)
+            Image.fromarray(input_u8, "RGB").save(input_path, format="PNG")
             placeholders = {
                 "input": str(input_path),
                 "output": str(output_path),
@@ -61,6 +62,21 @@ class ExternalProcessBackend(InferenceBackend):
                     self.manifest.manifest_path.parent
                     if self.manifest.manifest_path is not None
                     else Path.cwd()
+                ),
+                "model_strength": str(
+                    context.metadata.get("model_options", {}).get("model_strength", 1.0)
+                    if isinstance(context.metadata.get("model_options"), dict)
+                    else 1.0
+                ),
+                "denoise_strength": str(
+                    context.metadata.get("model_options", {}).get("denoise_strength", 1.0)
+                    if isinstance(context.metadata.get("model_options"), dict)
+                    else 1.0
+                ),
+                "output_scale": str(
+                    context.metadata.get("model_options", {}).get("output_scale", 1.0)
+                    if isinstance(context.metadata.get("model_options"), dict)
+                    else 1.0
                 ),
             }
             arguments = [item.format_map(placeholders) for item in self.manifest.arguments]
@@ -97,13 +113,13 @@ class ExternalProcessBackend(InferenceBackend):
                 raise InferenceError("外部模型未生成约定的输出文件")
             try:
                 with Image.open(output_path) as opened:
-                    output = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
+                    output_u8 = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
             except (OSError, UnidentifiedImageError) as exc:
                 raise InferenceError("外部模型输出不是有效图像") from exc
             context.metadata["external_stdout"] = stdout[-4000:]
             context.metadata["external_stderr"] = stderr[-4000:]
             context.report(1.0, f"{self.manifest.name} 完成")
-            return output
+            return np.ascontiguousarray(output_u8.astype(np.float32) / 255.0)
 
     def _resolve_executable(self) -> Path:
         """解析清单程序；``{python}`` 明确表示当前已激活虚拟环境解释器。"""

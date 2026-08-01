@@ -13,7 +13,8 @@
 
 ## 关键设计决策
 
-- 内部图像统一为 RGB `uint8`；算法内部需要时转为 `[0, 1] float32`。
+- 原图加载为只读 RGB `uint8`；流水线入口一次转换后，节点与缓存统一使用
+  `[0, 1]` RGB `float32`，只在明确的 8 位算法边界和编码器量化。
 - 原图只读，流水线通过参数摘要识别节点缓存；参数变更只淘汰当前及下游节点。
 - 预览代理最长边默认 1600 像素，导出始终从原始分辨率重新处理。
 - 几何算子固定在流水线前部，输出缩放固定在末尾；其余算子允许重排。
@@ -75,7 +76,7 @@
 - 实现 tile overlap/padding/边缘 tile/整数倍率/加权融合。
 - 验证：外部进程复制与取消、1×/2× tile 逐像素一致；最终全量 34 项通过。
 
-## 最终验证记录
+## 0.2 阶段验证记录
 
 ```text
 Python: /home/czc/gadget/.venv/bin/python (3.11.15)
@@ -125,3 +126,38 @@ Windows `.exe` 不能在 WSL 中交叉构建，因此本轮验证了 spec、Powe
 - PyInstaller 在装有可选 PyTorch 的 WSL 环境仍按 spec 排除 PyTorch/模型，Linux
   `dist/ScreenRestore/ScreenRestore` 构建成功并以 Qt offscreen 保持运行 4 秒；
   Windows `.exe` 仍须在 Windows 10/11 原生环境执行安装、构建和启动复验。
+
+### 2026-08-01：0.3 Web、几何扩展、模型分层与 8 组配对验收
+
+- 流水线节点和缓存统一迁移为 `[0,1]` RGB `float32`，仅入口保留只读 `uint8` 原图，
+  最终编码时量化；EV、白平衡和自动白场增益在线性光中计算。
+- 增加镜头棋盘格标定/畸变校正、弯曲银幕 Mesh Warp 和带局部质量选择的多帧融合。
+  多帧只把其他观测中真实存在的像素标为“观测补回”；全帧均丢失的信息仍明确拒绝
+  伪称真实恢复。
+- 增加同源本地 Web 前后端、模型服务端白名单、Geometry/Fidelity/AI Enhanced 三档、
+  单图/分割/并排/100% 对比和诊断下载。浏览器不能提交本机清单路径或任意外部命令。
+- 模型清单强制区分 restoration 与 enhancement。NAFNet GoPro 本地筛选在合成运动
+  与失焦样本上均退化，因此不进入默认路径；Real-ESRGAN 只作为低强度 enhancement。
+- 新增 8 组实拍/原图基准：参考图只做 SIFT + MAGSAC 定位和评分，不进入输出像素。
+  Fidelity 平均 PSNR 从 19.9299 提升到 20.4821 dB，平均 ΔE 从 10.5796 降到
+  9.4846；PSNR 与亮度 SSIM 均为 8/8 胜过 Geometry。
+- “测试6”的大面积低饱和白底触发证据门控白场校正，Fidelity PSNR 从 13.8780
+  提升到 17.2916 dB；其余 6 组 DISPLAY 样本均未触发。“电影测试二”Fidelity
+  相对 Geometry 为 PSNR +0.6362 dB、SSIM +0.0383、ΔE -1.0072，并生成五阶段消融。
+- 最终验证：Python 编译、Ruff 和前端 JavaScript 语法通过；
+  `QT_QPA_PLATFORM=offscreen python -m pytest -q` 为 68 项全部通过；
+  `python scripts/evaluate_paired.py` 完成 8 组三档本地推理和离线 HTML 报告。
+- 按本阶段产品方向未生成 Windows `.exe`，可复现入口为 `screenrestore-web` 和
+  `python scripts/evaluate_paired.py`。
+
+### 2026-08-01：8 组配对驱动的经典去摩尔纹与光晕优化
+
+- 不依赖模型新增亮度/色度联合去摩尔纹：以高频结构张量的方向相干度和能量构造局部
+  掩膜，再用大尺度边缘保护限制双边滤波。放弃了平均分略高但会软化测试 5 的全局平滑。
+- 新增独立 `dehalo` 算子，用窄/宽高亮扩散层差估计光学散射，只在暗场和有限高亮面积
+  证据同时成立时触发。电影测试二中人物固有轮廓光经数字原图确认后予以保留。
+- 8 组无模型 Fidelity 平均 PSNR 从旧版 20.4821 提升到 20.5850 dB，亮度 SSIM 从
+  0.7773 提升到 0.8063，平均 ΔE 从 9.4846 降到 9.4101。相对 Geometry，亮度 SSIM
+  8/8 改善、PSNR 7/8 改善；测试 5 唯一 PSNR 变化为 -0.0101 dB，SSIM 仍提升 0.0041。
+- Web 增加自适应/增强/关闭去摩尔纹，以及按预设/证据门控/增强/关闭光晕策略；诊断
+  返回处理权重、门控证据和触发状态。Python 编译、Ruff、前端语法及 71 项测试通过。

@@ -672,7 +672,12 @@ class MainWindow(QMainWindow):
         timings = self._last_metadata.get("timings", {})
         if isinstance(timings, dict):
             LOGGER.info("预览算子耗时：%s", timings)
-        display_result = self._diagnostic_display(result, self._last_metadata)
+        display_source = (
+            np.clip(np.rint(result * 255.0), 0, 255).astype(np.uint8)
+            if result.dtype == np.float32
+            else result
+        )
+        display_result = self._diagnostic_display(display_source, self._last_metadata)
         self.compare_view.update_result(display_result)
         self.dimension_label.setText(f"预览 {result.shape[1]} × {result.shape[0]}")
         elapsed = time.perf_counter() - self._started_at.get(generation, time.perf_counter())

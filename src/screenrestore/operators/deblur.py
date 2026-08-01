@@ -11,7 +11,7 @@ import numpy as np
 from screenrestore.core.operator import ImageOperator, ProcessingContext
 from screenrestore.core.parameters import ParameterModel
 
-from ._utils import require_range, require_rgb_u8
+from ._utils import clip_float, require_range, require_rgb_float
 
 
 class PsfType(StrEnum):
@@ -57,12 +57,12 @@ class DeblurOperator(ImageOperator[DeblurParameters]):
         params: DeblurParameters,
         context: ProcessingContext,
     ) -> np.ndarray:
-        require_rgb_u8(image)
+        require_rgb_float(image)
         self.validate(params)
         if params.strength == 0:
             return image.copy()
         lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        lightness = lab[..., 0].astype(np.float32) / 255.0
+        lightness = lab[..., 0] / 100.0
         psf = _make_psf(params)
         context.report(0.15, "执行 Wiener 反卷积")
         transfer = np.fft.fft2(np.fft.ifftshift(psf), s=lightness.shape)
@@ -76,9 +76,9 @@ class DeblurOperator(ImageOperator[DeblurParameters]):
         restored = np.clip(restored, 0.0, 1.0)
         mixed = lightness * (1.0 - params.strength) + restored * params.strength
         output_lab = lab.copy()
-        output_lab[..., 0] = np.clip(np.rint(mixed * 255), 0, 255).astype(np.uint8)
+        output_lab[..., 0] = np.clip(mixed * 100.0, 0.0, 100.0)
         context.report(1.0, "实验性去模糊完成")
-        return cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB)
+        return clip_float(cv2.cvtColor(output_lab, cv2.COLOR_LAB2RGB))
 
 
 def _make_psf(params: DeblurParameters) -> np.ndarray:
@@ -103,4 +103,3 @@ def _make_psf(params: DeblurParameters) -> np.ndarray:
             cv2.LINE_AA,
         )
     return psf / max(float(psf.sum()), 1e-8)
-
