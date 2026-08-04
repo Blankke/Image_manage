@@ -71,52 +71,62 @@ class TargetLocalizer:
         return ctx
 
     def _generate_candidates(self, image_rgb: np.ndarray) -> list[dict]:
-        """用现有 Geometry detector 生成候选四边形。"""
+        """用边缘+轮廓检测生成候选四边形。
+
+        改动(v10):
+        - RETR_EXTERNAL → RETR_LIST (找到嵌套轮廓)
+        - 删除 minAreaRect fallback — 非四边形候选不加惩罚但不参与竞争
+        - 删除 50% area prior
+        - 梯形不因对边不等长而扣分
+        """
         import cv2
 
         gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
         h, w = gray.shape[:2]
 
-        # 边缘检测
-        edges = cv2.Canny(gray, 30, 100)
-        # 膨胀连接
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        edges = cv2.dilate(edges, kernel, iterations=1)
-
-        # 找轮廓
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 多级 Canny
         candidates = []
+        for low_t, high_t in [(30, 100), (50, 150)]:
+            edges = cv2.Canny(gray, low_t, high_t)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            edges = cv2.dilate(edges, kernel, iterations=1)
 
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < w * h * 0.02:  # 至少占 2%
-                continue
-            if area > w * h * 0.95:  # 排除整图轮廓
-                continue
+            # RETR_LIST 保留所有轮廓（包括嵌套）
+            contours, hierarchy = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-            # 多边形拟合
-            peri = cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < w * h * 0.015:
+                    continue
+                if area > w * h * 0.92:
+                    continue
 
-            if len(approx) == 4:
+                # 先取凸包 — 自然边缘轮廓几乎从不凸
+                hull = cv2.convexHull(contour)
+                if hull is None or len(hull) < 4:
+                    continue
+
+                peri = cv2.arcLength(hull, True)
+                approx = cv2.approxPolyDP(hull, 0.02 * peri, True)
+
+                if len(approx) != 4:
+                    continue
+
                 poly = approx.reshape(4, 2).astype(np.float32)
-            else:
-                # 取最小外接矩形
-                rect = cv2.minAreaRect(contour)
-                poly = cv2.boxPoints(rect)
+                if not _is_valid_polygon(poly, w, h):
+                    continue
 
-            # 排序为 TL→TR→BR→BL
-            poly = _order_corners(poly)
+                poly = _order_corners(poly)
+                geo_score = _score_candidate_v2(poly, gray, w, h)
 
-            # 几何评分
-            geo_score = _score_candidate(poly, gray, w, h)
+                candidates.append({
+                    "polygon": poly,
+                    "score": geo_score,
+                    "geometry_score": geo_score,
+                    "semantic_score": 0.0,
+                })
 
-            candidates.append({
-                "polygon": poly,
-                "score": geo_score,
-                "geometry_score": geo_score,
-                "semantic_score": 0.0,
-            })
+        return candidates
 
         return candidates
 
@@ -175,47 +185,94 @@ def _order_corners(poly: np.ndarray) -> np.ndarray:
     return ordered.astype(np.float32)
 
 
-def _score_candidate(poly: np.ndarray, gray: np.ndarray, w: int, h: int) -> float:
-    """几何评分：矩形度 + 边缘强度 + 面积合理性 + 中心位置。"""
+def _score_candidate_v2(poly: np.ndarray, gray: np.ndarray, w: int, h: int) -> float:
+    """v10 几何评分：凸性 + 最小内角 + 边缘法向强度 + 方向一致性。"""
     import cv2
 
-    # 矩形度：对边长度比
-    top_len = np.linalg.norm(poly[1] - poly[0])
-    bot_len = np.linalg.norm(poly[2] - poly[3])
-    left_len = np.linalg.norm(poly[3] - poly[0])
-    right_len = np.linalg.norm(poly[2] - poly[1])
-    h_ratio = min(top_len, bot_len) / max(top_len, bot_len, 1)
-    v_ratio = min(left_len, right_len) / max(left_len, right_len, 1)
-    rectangularity = (h_ratio + v_ratio) / 2.0
+    # 1) 凸性
+    contour = poly.astype(np.int32).reshape(-1, 1, 2)
+    if not cv2.isContourConvex(contour):
+        return 0.0
 
-    # 边缘强度：沿四条边的梯度均值
-    edge_strength = 0.0
-    grad_mag = cv2.Sobel(gray, cv2.CV_32F, 1, 1)
-    for i in range(4):
-        p1, p2 = poly[i], poly[(i + 1) % 4]
-        for t in np.linspace(0, 1, 20):
-            px = int(p1[0] + t * (p2[0] - p1[0]))
-            py = int(p1[1] + t * (p2[1] - p1[1]))
-            if 0 <= px < w and 0 <= py < h:
-                edge_strength += float(grad_mag[py, px])
-    edge_strength = min(edge_strength / (80.0 * 255.0), 1.0)
+    # 2) 最小内角
+    min_angle = _min_interior_angle(poly)
+    if min_angle < 15 or min_angle > 170:
+        return 0.0
 
-    # 面积合理性：太大/太小扣分
+    # 3) 面积合法性（仅在排除极端）
     area = cv2.contourArea(poly.astype(np.float32))
     area_ratio = area / (w * h)
-    area_score = 1.0 - abs(area_ratio - 0.5) * 1.5  # 50% 最理想
-    area_score = max(0.0, min(1.0, area_score))
+    if area_ratio < 0.01 or area_ratio > 0.90:
+        return 0.0
 
-    # 中心位置
-    cx, cy = poly.mean(axis=0)
-    center_score = 1.0 - (abs(cx - w / 2) / (w / 2) * 0.3 + abs(cy - h / 2) / (h / 2) * 0.3)
+    # 4) 边缘法向强度 — 用正确梯度幅值 sqrt(Gx²+Gy²)
+    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(grad_x.astype(np.float64)**2 + grad_y.astype(np.float64)**2)
 
-    return float(
-        0.30 * rectangularity
-        + 0.25 * edge_strength
-        + 0.25 * area_score
-        + 0.20 * center_score
-    )
+    edge_score = 0.0
+    for i in range(4):
+        p1, p2 = poly[i], poly[(i + 1) % 4]
+        edge_vec = p2 - p1
+        length = float(np.linalg.norm(edge_vec))
+        if length < 5:
+            continue
+        # 法向
+        normal = np.array([-edge_vec[1], edge_vec[0]]) / length
+        # 沿边采样，向外偏移几个像素检测边缘
+        for t in np.linspace(0.1, 0.9, 8):
+            mid = p1 + t * (p2 - p1)
+            for offset in [2, 4, -2, -4]:
+                px = int(mid[0] + normal[0] * offset)
+                py = int(mid[1] + normal[1] * offset)
+                if 0 <= px < w and 0 <= py < h:
+                    edge_score += float(grad_mag[py, px])
+    edge_score = min(edge_score / (128.0 * 32.0), 1.0)
+
+    # 5) 矩形度：仅检查对边方向一致性（不要求长度相等 = 容忍透视）
+    top_dir = poly[1] - poly[0]
+    bot_dir = poly[2] - poly[3]
+    left_dir = poly[3] - poly[0]
+    right_dir = poly[2] - poly[1]
+    # 方向相似度 (cosine)
+    h_dot = np.dot(top_dir, bot_dir) / max(np.linalg.norm(top_dir) * np.linalg.norm(bot_dir), 1e-8)
+    v_dot = np.dot(left_dir, right_dir) / max(np.linalg.norm(left_dir) * np.linalg.norm(right_dir), 1e-8)
+    directionality = max(0.0, (h_dot + v_dot) / 2.0)
+
+    return float(0.50 * edge_score + 0.50 * directionality)
+
+
+def _min_interior_angle(poly: np.ndarray) -> float:
+    """计算四边形最小内角(度)。"""
+    angles = []
+    for i in range(4):
+        a = poly[i]
+        b = poly[(i + 1) % 4]
+        c = poly[(i + 2) % 4]
+        v1 = a - b
+        v2 = c - b
+        cos_angle = np.dot(v1, v2) / max(np.linalg.norm(v1) * np.linalg.norm(v2), 1e-8)
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+        angles.append(float(np.degrees(np.arccos(cos_angle))))
+    return min(angles)
+
+
+def _is_valid_polygon(poly: np.ndarray, w: int, h: int) -> bool:
+    """检查四边形是否合法：在边界内、非退化。"""
+    # clip check — 允许少量越界（框可能跨出画面）
+    if np.any(poly[:, 0] < -w * 0.2) or np.any(poly[:, 0] > w * 1.2):
+        return False
+    if np.any(poly[:, 1] < -h * 0.2) or np.any(poly[:, 1] > h * 1.2):
+        return False
+    # 最小边长
+    for i in range(4):
+        if np.linalg.norm(poly[i] - poly[(i+1)%4]) < 5:
+            return False
+    return True
+
+
+# 保留旧版 _score_candidate 作为别名
+_score_candidate = _score_candidate_v2
 
 
 # 导入 cv2 供 fillPoly 使用

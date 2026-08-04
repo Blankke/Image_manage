@@ -232,7 +232,22 @@ class RestorationPlanner:
         screen_conf = ctx.properties.get("screen_lattice_confidence", 0.0)
         moire_conf = max(moire_ratio * 2.5, screen_conf)
 
+        # DETECTOR_INCONSISTENT: 高 moire_ratio 但低 screen_lattice_confidence
+        inconsistent = (moire_ratio > 0.3 and screen_conf < 0.2)
+
         if scene_type == SCENE_DISPLAY:
+            if inconsistent:
+                return {
+                    "demoire": OperatorRecommendation(
+                        enabled=True,
+                        strength=0.3,  # 降级：不一致时保守
+                        reason=(
+                            f"DETECTOR_INCONSISTENT: moire_ratio={moire_ratio:.3f} "
+                            f"but screen_lattice={screen_conf:.2f} — 降级运行"
+                        ),
+                        params={"mode": "chroma"},
+                    ),
+                }
             return {
                 "demoire": OperatorRecommendation(
                     enabled=True,
@@ -242,7 +257,6 @@ class RestorationPlanner:
                 ),
             }
         if scene_type == SCENE_ARTWORK:
-            # 安全门会删除此项，此处仅作为 fallback
             return {}
         if scene_type == SCENE_CINEMA:
             if screen_conf > 0.7:
@@ -254,6 +268,8 @@ class RestorationPlanner:
                     ),
                 }
             return {}
+        if inconsistent:
+            return {}  # 不一致时不在非 DISPLAY 场景启用
         return {}
 
     def _recommend_reflection(

@@ -1,0 +1,63 @@
+{
+  "geometry": {
+    "status": "FAIL",
+    "scenes": {
+      "后台芭蕾": {
+        "status": "FAIL",
+        "corner_error_normalized": 0.139826,
+        "polygon_iou": 0.5736,
+        "max_corner_error_px": 430.03,
+        "corner_threshold": 0.02,
+        "iou_threshold": 0.9
+      },
+      "复古街头": {
+        "status": "FAIL",
+        "reason": "no target detected"
+      },
+      "电脑屏幕": {
+        "status": "FAIL",
+        "corner_error_normalized": 0.177239,
+        "polygon_iou": 0.5064,
+        "max_corner_error_px": 573.38,
+        "corner_threshold": 0.02,
+        "iou_threshold": 0.9
+      },
+      "红发女子": {
+        "status": "FAIL",
+        "corner_error_normalized": 0.24196,
+        "polygon_iou": 0.4035,
+        "max_corner_error_px": 684.69,
+        "corner_threshold": 0.02,
+        "iou_threshold": 0.9
+      }
+    }
+  },
+  "demoire": {
+    "status": "FAIL",
+    "moire_suppression_db": 0.5,
+    "suppression_threshold": 3.0,
+    "texture_retention": 0.1911,
+    "texture_threshold": 0.85
+  },
+  "reflection": {
+    "status": "FAIL",
+    "reflection_gain": -0.007,
+    "gain_threshold": 0.15,
+    "clean_region_degradation": 0.0071,
+    "degradation_threshold": 0.02,
+    "note": "UNANNOTATED: using full-image MAE as proxy for reflection region"
+  },
+  "cinema": {
+    "status": "FAIL",
+    "shadow_delta_e_before": 65.09,
+    "shadow_delta_e_after": 56.49,
+    "shadow_chroma_ref": 188.57,
+    "shadow_chroma_restored": 184.83,
+    "black_clipping": 0.006759,
+    "black_clipping_max": 0.003,
+    "global_psnr": 13.46,
+    "global_ssim": 0.5631,
+    "global_delta_e": 19.86
+  },
+  "overall": "FAIL"
+}

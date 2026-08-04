@@ -136,10 +136,14 @@ def _detect_degradations(image_rgb: np.ndarray) -> dict[str, float]:
 
 
 def _estimate_screen_lattice(image_rgb: np.ndarray) -> dict[str, float]:
-    """检测屏幕像素栅格 (screen lattice)。
+    """检测屏幕像素栅格 (screen lattice) — v10 确定性版本。
 
-    返回 screen_lattice_confidence, screen_frequency, screen_orientation。
-    用于区分真实屏幕摩尔纹 vs 自然纹理。
+    改动:
+    - 用固定 3×3 网格替代 np.random.randint (determinism)
+    - 按频谱强度排序峰值 (取前 8 个最强峰)
+    - 检测 conjugate symmetric pairs (FFT 对称性)
+    - 不再假设方向一定是 0/π/2 (拍摄角度使屏幕可旋转)
+    - 检测主导的两个近似正交方向
     """
     import cv2
 
@@ -149,75 +153,117 @@ def _estimate_screen_lattice(image_rgb: np.ndarray) -> dict[str, float]:
     if block_size < 64:
         return {"screen_lattice_confidence": 0.0}
 
-    # 多个 patch 的 FFT 分析
-    frequencies = []
-    orientations = []
-    peak_strengths = []
+    # 固定 3×3 网格 — 确定性!
+    grid_positions = []
+    for gy in range(3):
+        for gx in range(3):
+            y = max(0, min(h - block_size, gy * (h - block_size) // 2))
+            x = max(0, min(w - block_size, gx * (w - block_size) // 2))
+            grid_positions.append((y, x))
 
-    for _ in range(min(6, (h // block_size) * (w // block_size))):
-        y = np.random.randint(0, max(1, h - block_size))
-        x = np.random.randint(0, max(1, w - block_size))
+    all_peak_pairs = []  # (freq, angle1, angle2, strength)
+
+    for y, x in grid_positions:
         patch = gray[y:y+block_size, x:x+block_size]
-
         fft = np.fft.fft2(patch)
         fft_shifted = np.fft.fftshift(fft)
         magnitude = np.abs(fft_shifted)
-        # log magnitude，排除 DC
         log_mag = np.log1p(magnitude)
         cy, cx = log_mag.shape[0] // 2, log_mag.shape[1] // 2
         exclude = max(3, min(cy, cx) // 8)
-        log_mag[cy-exclude:cy+exclude, cx-exclude:cx+exclude] = 0
+        log_mag_c = log_mag.copy()
+        log_mag_c[cy-exclude:cy+exclude, cx-exclude:cx+exclude] = 0
 
-        # 找峰值
-        local_max = (log_mag > cv2.dilate(log_mag, np.ones((5, 5))) - 1e-8) & (log_mag > 0)
-        peaks = np.argwhere(local_max)
-        if len(peaks) < 2:
+        if log_mag_c.max() <= 0:
             continue
 
-        # 对每个峰计算频率和角度
-        for py, px in peaks[:10]:
+        # 找最强 8 个峰 — 按强度排序
+        local_max = (log_mag_c > cv2.dilate(log_mag_c, np.ones((5,5))) - 1e-8) & (log_mag_c > 0)
+        peak_coords = np.argwhere(local_max)
+        if len(peak_coords) < 2:
+            continue
+
+        peak_vals = np.array([log_mag_c[py, px] for py, px in peak_coords])
+        top_idx = np.argsort(peak_vals)[-8:]  # 最强 8 个
+        top_peaks = peak_coords[top_idx]
+
+        # 检测 conjugate symmetric pairs
+        peaks_info = []
+        for py, px in top_peaks:
             dy, dx = py - cy, px - cx
             dist = np.sqrt(dx**2 + dy**2)
-            if dist < 3:
+            if dist < 4:
                 continue
             freq = dist / block_size
             angle = np.arctan2(dy, dx)
-            strength = float(log_mag[py, px])
-            frequencies.append(freq)
-            orientations.append(angle)
-            peak_strengths.append(strength)
+            strength = float(log_mag_c[py, px])
+            peaks_info.append((freq, angle, strength, py, px))
 
-    if len(frequencies) < 3:
+        # 找 conjugate pairs: 峰 (dy,dx) 和 (-dy,-dx) 应成对出现
+        for i, (f1, a1, s1, py1, px1) in enumerate(peaks_info):
+            for j, (f2, a2, s2, py2, px2) in enumerate(peaks_info):
+                if j <= i:
+                    continue
+                # conjugate: 频率相近，方向相反
+                if abs(f1 - f2) / max(f1 + f2, 1e-8) < 0.2:
+                    # 检查是否大致对称: (dx2, dy2) ≈ -(dx1, dy1)
+                    dx1, dy1 = px1 - cx, py1 - cy
+                    dx2, dy2 = px2 - cx, py2 - cy
+                    dot = (dx1 * dx2 + dy1 * dy2) / max(
+                        np.sqrt(dx1**2+dy1**2) * np.sqrt(dx2**2+dy2**2), 1e-8
+                    )
+                    if dot < -0.7:  # 接近 -1 = 完全反向
+                        all_peak_pairs.append((f1, a1, a2, (s1 + s2) / 2))
+
+    if len(all_peak_pairs) < 2:
         return {"screen_lattice_confidence": 0.0}
 
-    frequencies = np.array(frequencies)
-    orientations = np.array(orientations)
+    # 分析主导方向: 检测两个近似正交的 lattice direction
+    freqs = np.array([p[0] for p in all_peak_pairs])
+    angles1 = np.array([p[1] for p in all_peak_pairs])
+    angles2 = np.array([p[2] for p in all_peak_pairs])
+    strengths = np.array([p[3] for p in all_peak_pairs])
 
-    # screen lattice 特征：多 patch 间频率一致 + 方向一致
-    freq_std = float(np.std(frequencies))
-    freq_mean = float(np.mean(frequencies))
-    # 方向应集中在 0 或 π/2 附近（屏幕像素是正交栅格）
-    # 归一化角度到 [0, π)
-    orientations_norm = np.abs(orientations) % np.pi
-    # 检查是否集中在 0, π/2 附近
-    near_horizontal = np.sum((orientations_norm < 0.15) | (orientations_norm > np.pi - 0.15))
-    near_vertical = np.sum(np.abs(orientations_norm - np.pi/2) < 0.15)
-    orientation_consistency = (near_horizontal + near_vertical) / len(orientations)
-
-    # 频率一致性：std/mean 小 → 一致
+    # 频率一致性
+    freq_mean = float(np.mean(freqs))
+    freq_std = float(np.std(freqs))
     freq_consistency = 1.0 - min(freq_std / max(freq_mean, 1e-8), 1.0)
 
-    # 综合置信度
+    # 角度一致性: 所有峰应来自两个正交 lattice direction
+    # 将角度归一到 [0, π)
+    all_angles = np.concatenate([angles1 % np.pi, angles2 % np.pi])
+    # 用 circular mean 检测是否有两个主导方向
+    # 简化: 检查角度是否聚成两个相差 ~π/2 的簇
+    angle_sorted = np.sort(all_angles)
+    gaps = np.diff(angle_sorted)
+    if len(gaps) >= 2:
+        max_gap_idx = np.argmax(gaps)
+        cluster1 = angle_sorted[:max_gap_idx + 1]
+        cluster2 = angle_sorted[max_gap_idx + 1:]
+        if len(cluster1) >= 2 and len(cluster2) >= 2:
+            c1_mean = float(np.mean(cluster1))
+            c2_mean = float(np.mean(cluster2))
+            orthogonality = abs(abs(c1_mean - c2_mean) - np.pi / 2) / (np.pi / 2)
+            orientation_consistency = 1.0 - min(orthogonality, 1.0)
+        else:
+            orientation_consistency = 0.0
+    else:
+        orientation_consistency = 0.0
+
+    # 强度
+    avg_strength = float(np.mean(strengths))
+
     confidence = float(
         0.35 * freq_consistency
         + 0.35 * orientation_consistency
-        + 0.30 * min(np.mean(peak_strengths) / 8.0, 1.0)
+        + 0.30 * min(avg_strength / 8.0, 1.0)
     )
 
     return {
         "screen_lattice_confidence": round(min(confidence, 1.0), 4),
         "screen_frequency": round(freq_mean, 4),
         "screen_orientation_consistency": round(orientation_consistency, 4),
+        "n_peak_pairs": len(all_peak_pairs),
     }
 
 
