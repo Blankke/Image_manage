@@ -1,0 +1,38 @@
+{
+  "scene_type": "artwork",
+  "scene_confidence": 0.834,
+  "recommended_preset": "artwork",
+  "user_preset": "artwork",
+  "operators": {
+    "geometry": {
+      "enabled": true,
+      "strength": 1.0,
+      "params": {},
+      "reason": "艺术品/画作场景需要透视校正"
+    },
+    "lens_distortion": {
+      "enabled": true,
+      "strength": 0.5,
+      "params": {},
+      "reason": "画作拍摄常有镜头畸变"
+    },
+    "sharpen": {
+      "enabled": true,
+      "strength": 0.15,
+      "params": {
+        "highlight_protection": 0.6,
+        "shadow_protection": 0.5
+      },
+      "reason": "艺术品轻度锐化, 保护高光/暗部"
+    },
+    "illumination": {
+      "enabled": true,
+      "strength": 0.2,
+      "params": {},
+      "reason": "照明不均=0.61 (轻度校正)"
+    }
+  },
+  "notes": [
+    "严格门: reflection 证据 0.40 < 阈值 0.9"
+  ]
+}

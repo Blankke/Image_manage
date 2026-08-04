@@ -1,0 +1,794 @@
+{
+  "version": "v9",
+  "scenes": 4,
+  "reports": [
+    {
+      "scene": "后台芭蕾",
+      "benchmark": "oracle",
+      "preset": "artwork",
+      "semantic_scene": "glossy_artwork",
+      "semantic_confidence": 0.834,
+      "registration": {
+        "feature_matches": 329,
+        "inliers": 225,
+        "inlier_ratio": 0.683891,
+        "median_reprojection_error_px": 1.40763,
+        "p95_reprojection_error_px": 3.152311,
+        "corners_photo": [
+          [
+            250.58700561523438,
+            288.87701416015625
+          ],
+          [
+            1120.06396484375,
+            221.0469970703125
+          ],
+          [
+            1101.97998046875,
+            1316.9949951171875
+          ],
+          [
+            296.97900390625,
+            1458.7080078125
+          ]
+        ]
+      },
+      "scene_context": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.834,
+        "has_target": false,
+        "target_bbox": null,
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.3544,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0021,
+          "shadow_clipping": 0.0001,
+          "illumination_gradient": 0.6118,
+          "black_level_r": 0.1373,
+          "black_level_g": 0.1098,
+          "black_level_b": 0.0941,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "artwork",
+        "scene_confidence": 0.834,
+        "recommended_preset": "artwork",
+        "user_preset": "artwork",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {},
+            "reason": "艺术品/画作场景需要透视校正"
+          },
+          "lens_distortion": {
+            "enabled": true,
+            "strength": 0.5,
+            "params": {},
+            "reason": "画作拍摄常有镜头畸变"
+          },
+          "sharpen": {
+            "enabled": true,
+            "strength": 0.15,
+            "params": {
+              "highlight_protection": 0.6,
+              "shadow_protection": 0.5
+            },
+            "reason": "艺术品轻度锐化, 保护高光/暗部"
+          },
+          "illumination": {
+            "enabled": true,
+            "strength": 0.2,
+            "params": {},
+            "reason": "照明不均=0.61 (轻度校正)"
+          }
+        },
+        "notes": [
+          "严格门: reflection 证据 0.40 < 阈值 0.9"
+        ]
+      },
+      "direct_warp_metrics": {
+        "mae_255": 49.94015,
+        "psnr_db": 11.068504,
+        "luminance_ssim": 0.56709,
+        "gradient_correlation": 0.227374,
+        "delta_e_mean": 22.898464,
+        "delta_e_p95": 75.717148,
+        "luminance_bias": 0.183888,
+        "contrast_ratio": 1.063368,
+        "sharpness_ratio": 0.997027,
+        "spectral_peak_ratio": 7.482068,
+        "spectral_peak_excess_db": -1.526625,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.000131
+      },
+      "restored_metrics": {
+        "mae_255": 48.503713,
+        "psnr_db": 11.325719,
+        "luminance_ssim": 0.568967,
+        "gradient_correlation": 0.228731,
+        "delta_e_mean": 22.388275,
+        "delta_e_p95": 73.343704,
+        "luminance_bias": 0.176114,
+        "contrast_ratio": 1.020509,
+        "sharpness_ratio": 1.00286,
+        "spectral_peak_ratio": 7.594873,
+        "spectral_peak_excess_db": -1.461637,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 2.7e-05
+      }
+    },
+    {
+      "scene": "后台芭蕾",
+      "benchmark": "e2e",
+      "preset": "artwork",
+      "has_target": true,
+      "corner_error_normalized": 0.143999,
+      "scene_context": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.834,
+        "has_target": true,
+        "target_bbox": [
+          0,
+          247,
+          1280,
+          1460
+        ],
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.3544,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0021,
+          "shadow_clipping": 0.0001,
+          "illumination_gradient": 0.6118,
+          "black_level_r": 0.1373,
+          "black_level_g": 0.1098,
+          "black_level_b": 0.0941,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "artwork",
+        "scene_confidence": 0.834,
+        "recommended_preset": "artwork",
+        "user_preset": "artwork",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {},
+            "reason": "艺术品/画作场景需要透视校正"
+          },
+          "lens_distortion": {
+            "enabled": true,
+            "strength": 0.5,
+            "params": {},
+            "reason": "画作拍摄常有镜头畸变"
+          },
+          "sharpen": {
+            "enabled": true,
+            "strength": 0.15,
+            "params": {
+              "highlight_protection": 0.6,
+              "shadow_protection": 0.5
+            },
+            "reason": "艺术品轻度锐化, 保护高光/暗部"
+          },
+          "illumination": {
+            "enabled": true,
+            "strength": 0.2,
+            "params": {},
+            "reason": "照明不均=0.61 (轻度校正)"
+          }
+        },
+        "notes": [
+          "严格门: reflection 证据 0.40 < 阈值 0.9"
+        ]
+      },
+      "restored_metrics": {
+        "mae_255": 92.232268,
+        "psnr_db": 7.173582,
+        "luminance_ssim": 0.37419,
+        "gradient_correlation": 0.069374,
+        "delta_e_mean": 40.347603,
+        "delta_e_p95": 77.845955,
+        "luminance_bias": 0.271094,
+        "contrast_ratio": 1.249202,
+        "sharpness_ratio": 1.911611,
+        "spectral_peak_ratio": 12.215542,
+        "spectral_peak_excess_db": 0.602286,
+        "black_clipping_ratio": 3e-06,
+        "white_clipping_ratio": 3e-06
+      }
+    },
+    {
+      "scene": "复古街头",
+      "benchmark": "oracle",
+      "preset": "glossy_artwork",
+      "semantic_scene": "display",
+      "semantic_confidence": 0.7054,
+      "registration": {
+        "feature_matches": 1327,
+        "inliers": 1093,
+        "inlier_ratio": 0.823662,
+        "median_reprojection_error_px": 1.160106,
+        "p95_reprojection_error_px": 2.688263,
+        "corners_photo": [
+          [
+            200.78500366210938,
+            357.45599365234375
+          ],
+          [
+            1172.2080078125,
+            294.24798583984375
+          ],
+          [
+            1304.156982421875,
+            957.64599609375
+          ],
+          [
+            325.97698974609375,
+            1134.112060546875
+          ]
+        ]
+      },
+      "scene_context": {
+        "scene_type": "display",
+        "scene_confidence": 0.7054,
+        "has_target": false,
+        "target_bbox": null,
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.0,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0013,
+          "shadow_clipping": 0.0,
+          "illumination_gradient": 0.4902,
+          "black_level_r": 0.1137,
+          "black_level_g": 0.102,
+          "black_level_b": 0.098,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.7054,
+        "recommended_preset": "glossy_artwork",
+        "user_preset": "glossy_artwork",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {},
+            "reason": "艺术品/画作场景需要透视校正"
+          },
+          "lens_distortion": {
+            "enabled": true,
+            "strength": 0.5,
+            "params": {},
+            "reason": "画作拍摄常有镜头畸变"
+          },
+          "reflection": {
+            "enabled": true,
+            "strength": 0.41095327643303653,
+            "params": {},
+            "reason": "覆膜/玻璃场景, 反光面积=3.70%, 存在饱和反光 → 建议多帧"
+          }
+        },
+        "notes": []
+      },
+      "direct_warp_metrics": {
+        "mae_255": 39.413913,
+        "psnr_db": 13.679676,
+        "luminance_ssim": 0.391687,
+        "gradient_correlation": 0.387438,
+        "delta_e_mean": 22.87899,
+        "delta_e_p95": 53.821705,
+        "luminance_bias": -0.021365,
+        "contrast_ratio": 0.702203,
+        "sharpness_ratio": 0.126397,
+        "spectral_peak_ratio": 19.400137,
+        "spectral_peak_excess_db": 0.379995,
+        "black_clipping_ratio": 1.4e-05,
+        "white_clipping_ratio": 0.000228
+      },
+      "restored_metrics": {
+        "mae_255": 39.709754,
+        "psnr_db": 13.616688,
+        "luminance_ssim": 0.393579,
+        "gradient_correlation": 0.38867,
+        "delta_e_mean": 23.050945,
+        "delta_e_p95": 54.364861,
+        "luminance_bias": -0.028865,
+        "contrast_ratio": 0.694999,
+        "sharpness_ratio": 0.133478,
+        "spectral_peak_ratio": 19.259153,
+        "spectral_peak_excess_db": 0.348319,
+        "black_clipping_ratio": 6.1e-05,
+        "white_clipping_ratio": 6e-05
+      }
+    },
+    {
+      "scene": "复古街头",
+      "benchmark": "e2e",
+      "preset": "glossy_artwork",
+      "has_target": true,
+      "corner_error_normalized": 0.116495,
+      "scene_context": {
+        "scene_type": "display",
+        "scene_confidence": 0.7054,
+        "has_target": true,
+        "target_bbox": [
+          -35,
+          286,
+          1386,
+          1020
+        ],
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.0,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0013,
+          "shadow_clipping": 0.0,
+          "illumination_gradient": 0.4902,
+          "black_level_r": 0.1137,
+          "black_level_g": 0.102,
+          "black_level_b": 0.098,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.7054,
+        "recommended_preset": "glossy_artwork",
+        "user_preset": "glossy_artwork",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {},
+            "reason": "艺术品/画作场景需要透视校正"
+          },
+          "lens_distortion": {
+            "enabled": true,
+            "strength": 0.5,
+            "params": {},
+            "reason": "画作拍摄常有镜头畸变"
+          },
+          "reflection": {
+            "enabled": true,
+            "strength": 0.41095327643303653,
+            "params": {},
+            "reason": "覆膜/玻璃场景, 反光面积=3.70%, 存在饱和反光 → 建议多帧"
+          }
+        },
+        "notes": []
+      },
+      "restored_metrics": {
+        "mae_255": 88.627425,
+        "psnr_db": 7.59246,
+        "luminance_ssim": 0.134038,
+        "gradient_correlation": 0.03766,
+        "delta_e_mean": 46.419582,
+        "delta_e_p95": 76.463249,
+        "luminance_bias": 0.104748,
+        "contrast_ratio": 0.856225,
+        "sharpness_ratio": 0.203192,
+        "spectral_peak_ratio": 12.617755,
+        "spectral_peak_excess_db": -1.488232,
+        "black_clipping_ratio": 0.014626,
+        "white_clipping_ratio": 0.000114
+      }
+    },
+    {
+      "scene": "电脑屏幕",
+      "benchmark": "oracle",
+      "preset": "display",
+      "semantic_scene": "glossy_artwork",
+      "semantic_confidence": 0.8166,
+      "registration": {
+        "feature_matches": 1471,
+        "inliers": 1340,
+        "inlier_ratio": 0.910945,
+        "median_reprojection_error_px": 0.920858,
+        "p95_reprojection_error_px": 2.492584,
+        "corners_photo": [
+          [
+            143.49400329589844,
+            551.7509765625
+          ],
+          [
+            928.4600219726562,
+            611.2009887695312
+          ],
+          [
+            998.635009765625,
+            1736.208984375
+          ],
+          [
+            35.62300109863281,
+            1759.5689697265625
+          ]
+        ]
+      },
+      "scene_context": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.8166,
+        "has_target": false,
+        "target_bbox": null,
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.1882,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0011,
+          "shadow_clipping": 0.0,
+          "illumination_gradient": 0.5064,
+          "black_level_r": 0.0471,
+          "black_level_g": 0.051,
+          "black_level_b": 0.1059,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "display",
+        "scene_confidence": 0.8166,
+        "recommended_preset": "display",
+        "user_preset": "display",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 0.5,
+            "params": {},
+            "reason": "显示器场景透视校正 (目标=待定位)"
+          },
+          "demoire": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {
+              "mode": "joint_edge_aware"
+            },
+            "reason": "显示器场景, moire_ratio=0.547 screen_conf=0.00"
+          }
+        },
+        "notes": []
+      },
+      "direct_warp_metrics": {
+        "mae_255": 18.998374,
+        "psnr_db": 19.97314,
+        "luminance_ssim": 0.692741,
+        "gradient_correlation": 0.604837,
+        "delta_e_mean": 9.474995,
+        "delta_e_p95": 20.853746,
+        "luminance_bias": 0.061589,
+        "contrast_ratio": 0.99995,
+        "sharpness_ratio": 0.280785,
+        "spectral_peak_ratio": 8.28953,
+        "spectral_peak_excess_db": 0.248074,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 3.8e-05
+      },
+      "restored_metrics": {
+        "mae_255": 18.360362,
+        "psnr_db": 20.265355,
+        "luminance_ssim": 0.730672,
+        "gradient_correlation": 0.623466,
+        "delta_e_mean": 9.260312,
+        "delta_e_p95": 20.501806,
+        "luminance_bias": 0.057507,
+        "contrast_ratio": 0.989264,
+        "sharpness_ratio": 0.188768,
+        "spectral_peak_ratio": 8.95851,
+        "spectral_peak_excess_db": 0.585133,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.0
+      }
+    },
+    {
+      "scene": "电脑屏幕",
+      "benchmark": "e2e",
+      "preset": "display",
+      "has_target": true,
+      "corner_error_normalized": 0.058795,
+      "scene_context": {
+        "scene_type": "glossy_artwork",
+        "scene_confidence": 0.8166,
+        "has_target": true,
+        "target_bbox": [
+          0,
+          550,
+          1079,
+          1285
+        ],
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.1882,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0011,
+          "shadow_clipping": 0.0,
+          "illumination_gradient": 0.5064,
+          "black_level_r": 0.0471,
+          "black_level_g": 0.051,
+          "black_level_b": 0.1059,
+          "screen_lattice_confidence": 0.3296,
+          "screen_frequency": 0.5918,
+          "screen_orientation_consistency": 0.0385
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "display",
+        "scene_confidence": 0.8166,
+        "recommended_preset": "display",
+        "user_preset": "display",
+        "operators": {
+          "geometry": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {},
+            "reason": "显示器场景透视校正 (目标=已定位)"
+          },
+          "demoire": {
+            "enabled": true,
+            "strength": 1.0,
+            "params": {
+              "mode": "joint_edge_aware"
+            },
+            "reason": "显示器场景, moire_ratio=0.547 screen_conf=0.33"
+          }
+        },
+        "notes": []
+      },
+      "restored_metrics": {
+        "mae_255": 73.6787,
+        "psnr_db": 8.048666,
+        "luminance_ssim": 0.439092,
+        "gradient_correlation": 0.124617,
+        "delta_e_mean": 32.595535,
+        "delta_e_p95": 83.557625,
+        "luminance_bias": 0.189673,
+        "contrast_ratio": 1.308897,
+        "sharpness_ratio": 0.220443,
+        "spectral_peak_ratio": 10.056246,
+        "spectral_peak_excess_db": 1.087133,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.0
+      }
+    },
+    {
+      "scene": "红发女子",
+      "benchmark": "oracle",
+      "preset": "cinema",
+      "semantic_scene": "display",
+      "semantic_confidence": 0.6669,
+      "registration": {
+        "feature_matches": 256,
+        "inliers": 140,
+        "inlier_ratio": 0.546875,
+        "median_reprojection_error_px": 1.458928,
+        "p95_reprojection_error_px": 2.651197,
+        "corners_photo": [
+          [
+            25.97599983215332,
+            202.6540069580078
+          ],
+          [
+            1262.89404296875,
+            200.21099853515625
+          ],
+          [
+            1275.406982421875,
+            908.3460083007812
+          ],
+          [
+            14.045000076293945,
+            903.822998046875
+          ]
+        ]
+      },
+      "scene_context": {
+        "scene_type": "display",
+        "scene_confidence": 0.6669,
+        "has_target": false,
+        "target_bbox": null,
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.7652,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0002,
+          "shadow_clipping": 0.1017,
+          "illumination_gradient": 0.7555,
+          "black_level_r": 0.0,
+          "black_level_g": 0.0,
+          "black_level_b": 0.0,
+          "screen_lattice_confidence": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "cinema",
+        "scene_confidence": 0.6669,
+        "recommended_preset": "cinema",
+        "user_preset": "cinema",
+        "operators": {
+          "dehalo": {
+            "enabled": true,
+            "strength": 0.3,
+            "params": {
+              "auto_gate": true
+            },
+            "reason": "电影院场景轻度去光晕 (auto_gate)"
+          },
+          "denoise": {
+            "enabled": true,
+            "strength": 0.15,
+            "params": {
+              "mode": "luma_chroma",
+              "chroma_strength": 3.0
+            },
+            "reason": "电影院场景轻度去噪"
+          }
+        },
+        "notes": []
+      },
+      "direct_warp_metrics": {
+        "mae_255": 46.055634,
+        "psnr_db": 12.819314,
+        "luminance_ssim": 0.534342,
+        "gradient_correlation": 0.361924,
+        "delta_e_mean": 21.889444,
+        "delta_e_p95": 54.542564,
+        "luminance_bias": 0.160359,
+        "contrast_ratio": 0.860024,
+        "sharpness_ratio": 0.291486,
+        "spectral_peak_ratio": 8.02069,
+        "spectral_peak_excess_db": 0.230763,
+        "black_clipping_ratio": 0.000104,
+        "white_clipping_ratio": 1.3e-05
+      },
+      "restored_metrics": {
+        "mae_255": 41.859584,
+        "psnr_db": 13.359689,
+        "luminance_ssim": 0.553104,
+        "gradient_correlation": 0.362924,
+        "delta_e_mean": 19.99382,
+        "delta_e_p95": 53.902794,
+        "luminance_bias": 0.140934,
+        "contrast_ratio": 0.913821,
+        "sharpness_ratio": 0.34687,
+        "spectral_peak_ratio": 7.901266,
+        "spectral_peak_excess_db": 0.165613,
+        "black_clipping_ratio": 0.007923,
+        "white_clipping_ratio": 7.2e-05
+      }
+    },
+    {
+      "scene": "红发女子",
+      "benchmark": "e2e",
+      "preset": "cinema",
+      "has_target": true,
+      "corner_error_normalized": 0.195104,
+      "scene_context": {
+        "scene_type": "display",
+        "scene_confidence": 0.6669,
+        "has_target": true,
+        "target_bbox": [
+          574,
+          255,
+          702,
+          582
+        ],
+        "semantic_labels": [
+          "flat_region",
+          "fine_texture"
+        ],
+        "artifact_labels": [
+          "reflection",
+          "moire"
+        ],
+        "properties": {
+          "blur_estimate": 0.7652,
+          "noise_estimate": 0.0,
+          "highlight_clipping": 0.0002,
+          "shadow_clipping": 0.1017,
+          "illumination_gradient": 0.7555,
+          "black_level_r": 0.0,
+          "black_level_g": 0.0,
+          "black_level_b": 0.0,
+          "screen_lattice_confidence": 0.3373,
+          "screen_frequency": 0.6261,
+          "screen_orientation_consistency": 0.0
+        }
+      },
+      "restoration_plan": {
+        "scene_type": "cinema",
+        "scene_confidence": 0.6669,
+        "recommended_preset": "cinema",
+        "user_preset": "cinema",
+        "operators": {
+          "dehalo": {
+            "enabled": true,
+            "strength": 0.3,
+            "params": {
+              "auto_gate": true
+            },
+            "reason": "电影院场景轻度去光晕 (auto_gate)"
+          },
+          "denoise": {
+            "enabled": true,
+            "strength": 0.15,
+            "params": {
+              "mode": "luma_chroma",
+              "chroma_strength": 3.0
+            },
+            "reason": "电影院场景轻度去噪"
+          }
+        },
+        "notes": []
+      },
+      "restored_metrics": {
+        "mae_255": 84.565534,
+        "psnr_db": 7.834015,
+        "luminance_ssim": 0.418587,
+        "gradient_correlation": 0.079192,
+        "delta_e_mean": 38.804852,
+        "delta_e_p95": 77.319725,
+        "luminance_bias": 0.210683,
+        "contrast_ratio": 0.71493,
+        "sharpness_ratio": 0.149927,
+        "spectral_peak_ratio": 8.845637,
+        "spectral_peak_excess_db": 0.655937,
+        "black_clipping_ratio": 0.000136,
+        "white_clipping_ratio": 1.7e-05
+      }
+    }
+  ]
+}

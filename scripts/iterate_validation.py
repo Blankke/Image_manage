@@ -1,523 +1,182 @@
-"""迭代验证脚本：处理四种场景测试图像，保存输出版本并生成数值对比报告。
-
-v5 改进：
-  - 增加 SemanticAnalyzer 前置语义分析层
-  - 增加 RestorationPlanner 自动推荐算子配置
-  - SceneContext + RestorationPlan 写入诊断报告
-  - 保留 v4 的直接单应 warp + ECC 精修对齐策略
-
-用法:
-    source .venv/bin/activate
-    python scripts/iterate_validation.py                # 默认 v5
-    python scripts/iterate_validation.py --version v6   # 指定版本
-
-输出:
-    output/<version>/
-        <场景>_恢复.png          处理结果
-        <场景>_直接warp.png      SIFT 单应直接 warp
-        <场景>_差异热图.png      可视化差异
-        <场景>_内容定位.png      SIFT 检测到的内容区域
-        scene_context.json       语义分析结果
-        restoration_plan.json    恢复计划
-        metrics.json             数值指标汇总
-"""
+"""ScreenRestore 迭代验证 — Oracle + E2E 双 benchmark, v9"""
 
 from __future__ import annotations
-
-import argparse
-import json
-import sys
+import argparse, json, sys, math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-import cv2
-import numpy as np
+import cv2, numpy as np
 
 from screenrestore.core.operator import ProcessingContext
 from screenrestore.core.pipeline import ImagePipeline, OperatorRegistry
 from screenrestore.core.presets import (
-    PresetId,
-    ProcessingMode,
-    apply_preset,
-    apply_processing_mode,
-    build_default_pipeline,
-    build_registry,
+    PresetId, ProcessingMode,
+    apply_preset, apply_processing_mode,
+    build_default_pipeline, build_registry,
 )
 from screenrestore.io.image_loader import load_image
-from screenrestore.semantic import (
-    SceneContext,
-    SemanticAnalyzer,
-    RestorationPlanner,
-)
-from screenrestore.validation import (
-    ReferenceRegistration,
-    compare_images,
-    difference_heatmap,
-    register_reference,
-)
-
-# ── 场景定义 ──────────────────────────────────────────────
+from screenrestore.semantic import SemanticAnalyzer, RestorationPlanner
+from screenrestore.semantic.target_localizer import TargetLocalizer
+from screenrestore.validation import compare_images, difference_heatmap, register_reference
+from screenrestore.operators.geometry import warp_perspective, AspectRatioMode, InterpolationMode
 
 @dataclass(frozen=True, slots=True)
 class SceneCase:
-    name: str
-    photo: Path
-    reference: Path
-    preset: PresetId
+    name: str; photo: Path; reference: Path; preset: PresetId
 
-
-def discover_scenes(data_dir: Path) -> list[SceneCase]:
-    """发现四种测试场景及其原图。"""
+def discover_scenes(data_dir):
     ref_dir = data_dir / "原图"
-    mapping = [
-        ("后台芭蕾", "后台芭蕾.jpg", "后台芭蕾原图.png", PresetId.ARTWORK),
-        ("复古街头", "复古街头.jpg", "复古街头原图.png", PresetId.GLOSSY_ARTWORK),
-        ("电脑屏幕", "电脑屏幕.jpg", "电脑屏幕原图.jpg", PresetId.DISPLAY),
-        ("红发女子", "红发女子.jpg", "红发女子原图.png", PresetId.CINEMA),
-    ]
-    cases = []
-    for name, photo_fn, ref_fn, preset in mapping:
-        photo_path = data_dir / photo_fn
-        ref_path = ref_dir / ref_fn
-        if not photo_path.is_file():
-            print(f"⚠ 跳过 {name}：找不到 {photo_path}", file=sys.stderr)
-            continue
-        if not ref_path.is_file():
-            print(f"⚠ 跳过 {name}：找不到 {ref_path}", file=sys.stderr)
-            continue
-        cases.append(SceneCase(name, photo_path, ref_path, preset))
-    return cases
+    return [SceneCase(n, data_dir/pn, ref_dir/rn, ps)
+            for n, pn, rn, ps in [
+                ("后台芭蕾","后台芭蕾.jpg","后台芭蕾原图.png",PresetId.ARTWORK),
+                ("复古街头","复古街头.jpg","复古街头原图.png",PresetId.GLOSSY_ARTWORK),
+                ("电脑屏幕","电脑屏幕.jpg","电脑屏幕原图.jpg",PresetId.DISPLAY),
+                ("红发女子","红发女子.jpg","红发女子原图.png",PresetId.CINEMA),
+            ] if (data_dir/pn).is_file() and (ref_dir/rn).is_file()]
 
+def ecc_refine(c, r, max_iter=100, eps=1e-8, max_shift=20.0):
+    rh, rw = r.shape[:2]
+    if c.shape[:2] != (rh, rw): c = cv2.resize(c, (rw, rh), interpolation=cv2.INTER_LANCZOS4)
+    cg = cv2.cvtColor((c.astype(np.float32)/255).clip(0,1), cv2.COLOR_RGB2GRAY)
+    rg = cv2.cvtColor((r.astype(np.float32)/255).clip(0,1), cv2.COLOR_RGB2GRAY)
+    crit = (cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT, max_iter, eps)
+    for motion, name, init in [(cv2.MOTION_HOMOGRAPHY,"homography",np.eye(3,3,dtype=np.float32)),
+                                (cv2.MOTION_TRANSLATION,"translation",np.eye(2,3,dtype=np.float32))]:
+        try:
+            sc, M = cv2.findTransformECC(rg, cg, init, motion, crit, None, 3)
+            dx, dy = M[0,2], M[1,2]
+            if abs(dx)<max_shift and abs(dy)<max_shift:
+                a = cv2.warpPerspective(c,M,(rw,rh),flags=cv2.INTER_LANCZOS4,borderMode=cv2.BORDER_REPLICATE) if motion==cv2.MOTION_HOMOGRAPHY else cv2.warpAffine(c,M,(rw,rh),flags=cv2.INTER_LANCZOS4,borderMode=cv2.BORDER_REPLICATE)
+                return a, {"ecc_score":round(float(sc),6),"ecc_method":name,"dx_px":round(float(dx),4),"dy_px":round(float(dy),4)}
+        except cv2.error: pass
+    return c, {"ecc_score":0,"ecc_method":"fallback","dx_px":0,"dy_px":0}
 
-# ── ECC 亚像素精修 ────────────────────────────────────────
-
-def ecc_refine(
-    candidate_rgb: np.ndarray,
-    reference_rgb: np.ndarray,
-    *,
-    max_iterations: int = 100,
-    epsilon: float = 1e-8,
-    max_shift_px: float = 20.0,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """用 ECC 在亚像素级别精修对齐。
-
-    策略：先尝试 MOTION_HOMOGRAPHY，若位移过大（>max_shift_px 说明收敛到
-    错误局部极值）则回退到 MOTION_TRANSLATION。两张图视觉差异大（如照片 vs
-    数字原图）时 homography 自由度太高易跑偏，translation 更稳健。
-    """
-    rh, rw = reference_rgb.shape[:2]
-
-    if candidate_rgb.shape[:2] != (rh, rw):
-        candidate_resized = cv2.resize(
-            candidate_rgb, (rw, rh), interpolation=cv2.INTER_LANCZOS4,
-        )
-    else:
-        candidate_resized = candidate_rgb
-
-    candidate_gray = cv2.cvtColor(
-        (candidate_resized.astype(np.float32) / 255.0).clip(0, 1), cv2.COLOR_RGB2GRAY,
-    )
-    reference_gray = cv2.cvtColor(
-        (reference_rgb.astype(np.float32) / 255.0).clip(0, 1), cv2.COLOR_RGB2GRAY,
-    )
-
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iterations, epsilon)
-
-    # 第一优先：homography
-    try:
-        H_init = np.eye(3, 3, dtype=np.float32)
-        score, H = cv2.findTransformECC(
-            reference_gray, candidate_gray, H_init,
-            cv2.MOTION_HOMOGRAPHY, criteria,
-            inputMask=None, gaussFiltSize=3,
-        )
-        dx, dy = H[0, 2], H[1, 2]
-        # 检查位移是否合理——过大说明 ECC 跑偏到错误局部极值
-        if abs(dx) < max_shift_px and abs(dy) < max_shift_px:
-            aligned = cv2.warpPerspective(
-                candidate_resized, H, (rw, rh),
-                flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE,
-            )
-            return aligned, {
-                "ecc_score": round(float(score), 6),
-                "ecc_method": "homography",
-                "dx_px": round(float(dx), 4),
-                "dy_px": round(float(dy), 4),
-            }
-    except cv2.error:
-        pass
-
-    # 第二优先：translation（更稳健）
-    try:
-        T_init = np.eye(2, 3, dtype=np.float32)
-        score, T = cv2.findTransformECC(
-            reference_gray, candidate_gray, T_init,
-            cv2.MOTION_TRANSLATION, criteria,
-            inputMask=None, gaussFiltSize=3,
-        )
-        dx, dy = T[0, 2], T[1, 2]
-        if abs(dx) < max_shift_px and abs(dy) < max_shift_px:
-            aligned = cv2.warpAffine(
-                candidate_resized, T, (rw, rh),
-                flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE,
-            )
-            return aligned, {
-                "ecc_score": round(float(score), 6),
-                "ecc_method": "translation",
-                "dx_px": round(float(dx), 4),
-                "dy_px": round(float(dy), 4),
-            }
-    except cv2.error:
-        pass
-
-    return candidate_resized, {
-        "ecc_score": 0.0,
-        "ecc_method": "fallback_identity",
-        "dx_px": 0.0,
-        "dy_px": 0.0,
-    }
-
-
-# ── 处理逻辑 ──────────────────────────────────────────────
-
-def process_scene(
-    scene: SceneCase,
-    registry: OperatorRegistry,
-    *,
-    analyzer: SemanticAnalyzer | None = None,
-    planner: RestorationPlanner | None = None,
-) -> dict:
-    """处理单个场景：语义分析 → SIFT 配准 → 直接单应 warp → 恢复。"""
-    print(f"  📷 加载 {scene.name} ...")
-    photo_doc = load_image(scene.photo)
-    ref_doc = load_image(scene.reference)
-    photo = photo_doc.original_rgb
-    reference = ref_doc.original_rgb
-    rh, rw = reference.shape[:2]
-
-    # 0) 语义分析
-    print(f"  🧠 语义分析 {scene.name} ...")
-    _analyzer = analyzer or SemanticAnalyzer()
-    scene_ctx = _analyzer.analyze(photo)
-    print(f"     场景: {scene_ctx.scene_type} (置信度={scene_ctx.scene_confidence:.2f})")
-    print(f"     退化: blur={scene_ctx.properties.get('blur_estimate',0):.2f} "
-          f"noise={scene_ctx.properties.get('noise_estimate',0):.2f} "
-          f"illum={scene_ctx.properties.get('illumination_gradient',0):.2f}")
-    if scene_ctx.artifact_masks:
-        print(f"     伪影: {list(scene_ctx.artifact_masks.keys())}")
-
-    # 0b) 恢复计划
-    _planner = planner or RestorationPlanner()
-    plan = _planner.plan(scene_ctx)
-    print(f"     推荐 preset: {plan.recommended_preset.value}")
-    active_ops = [op_id for op_id, rec in plan.operators.items() if rec.enabled]
-    if active_ops:
-        print(f"     推荐算子: {active_ops}")
-
-    # 1) SIFT 配准：参考图 → 拍摄图
-    print(f"  🎯 SIFT 配准 {scene.name} ...")
-    registration = register_reference(photo, reference)
-    H_ref_to_photo = registration.homography_reference_to_photo
-
-    # 2) 直接用单应的逆 warp 到参考图精确尺寸（绕过 GeometryOperator）
-    H_photo_to_ref = np.linalg.inv(H_ref_to_photo)
-    H_photo_to_ref /= H_photo_to_ref[2, 2]
-    direct_warp = cv2.warpPerspective(
-        photo, H_photo_to_ref, (rw, rh),
-        flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE,
-    )
-    print(f"  📐 直接 warp: {photo.shape[1]}x{photo.shape[0]} → {rw}x{rh}")
-
-    # 3) 构建恢复流水线 — 使用场景已知 preset + 语义退化诊断
-    print(f"  ⚙ 构建流水线 preset={scene.preset.value} (已知正确类型) ...")
-    pipeline = build_restoration_pipeline(registry, scene.preset)
-    # 语义分析提供退化诊断，补充 preset 未覆盖的细节
-    _apply_semantic_diagnostics(pipeline, scene_ctx)
-    context = ProcessingContext(preview=False)
-    # 将 scene_ctx 注入 context metadata，供下游算子使用
-    context.metadata["scene_context"] = scene_ctx
-    restored = pipeline.process(
-        direct_warp, context,
-        source_id=f"iterate:{photo_doc.content_hash}",
-    )
-    if restored.dtype != np.uint8:
-        restored = np.clip(restored * 255.0, 0, 255).astype(np.uint8)
-
-    # 4) ECC 精修
-    print(f"  📊 ECC 精修 {scene.name} ...")
-    aligned_warp, warp_alignment = ecc_refine(direct_warp, reference)
-    aligned_restored, restored_alignment = ecc_refine(restored, reference)
-
-    # 5) 评分
-    warp_metrics = compare_images(aligned_warp, reference)
-    restored_metrics = compare_images(aligned_restored, reference)
-
-    # 6) 差异热图 + 定位可视化
-    diff_warp = difference_heatmap(aligned_warp, reference)
-    diff_restored = difference_heatmap(aligned_restored, reference)
-    corners_viz = draw_reference_corners(photo, registration.corners_photo)
-
-    return {
-        "scene": scene.name,
-        "preset": scene.preset.value,
-        "semantic_scene": scene_ctx.scene_type,
-        "semantic_confidence": scene_ctx.scene_confidence,
-        "photo_size": [photo.shape[1], photo.shape[0]],
-        "reference_size": [rw, rh],
-        "warp_output_size": [direct_warp.shape[1], direct_warp.shape[0]],
-        "restored_output_size": [restored.shape[1], restored.shape[0]],
-        "scene_context": scene_ctx.to_dict(),
-        "restoration_plan": plan.to_dict(),
-        "registration": registration.to_dict(),
-        "warp_alignment": warp_alignment,
-        "restored_alignment": restored_alignment,
-        "direct_warp_metrics": warp_metrics,
-        "restored_metrics": restored_metrics,
-        "images": {
-            "direct_warp": direct_warp,
-            "restored": restored,
-            "aligned_warp": aligned_warp,
-            "aligned_restored": aligned_restored,
-            "diff_warp": diff_warp,
-            "diff_restored": diff_restored,
-            "corners_viz": corners_viz,
-        },
-    }
-
-
-def build_restoration_pipeline(
-    registry: OperatorRegistry,
-    preset: PresetId,
-) -> ImagePipeline:
-    """构建仅含恢复算子的流水线（跳过 orientation/lens/geometry/mesh）。"""
-    pipeline = build_default_pipeline(registry)
+def apply_plan(pipeline, plan, preset):
     apply_preset(pipeline, preset)
     apply_processing_mode(pipeline, ProcessingMode.FIDELITY)
-
-    # 关闭所有几何算子 — 已通过直接单应 warp 完成几何校正
-    for geo_op in ("orientation", "lens_distortion", "geometry", "mesh_warp"):
-        pipeline.set_enabled(geo_op, False)
-
+    for g in ("orientation","lens_distortion","geometry","mesh_warp"):
+        pipeline.set_enabled(g, False)
+    for oid, rec in plan.operators.items():
+        try:
+            st = pipeline.state(oid)
+            if rec.enabled != st.enabled: pipeline.set_enabled(oid, rec.enabled)
+            if rec.params:
+                cur = st.params.to_dict(); cur.update(rec.params)
+                pipeline.update_parameters(oid, cur)
+        except ValueError: pass
     return pipeline
 
+def process_oracle(scene, registry, analyzer, planner):
+    pd = load_image(scene.photo); rd = load_image(scene.reference)
+    photo, ref = pd.original_rgb, rd.original_rgb
+    rh, rw = ref.shape[:2]
+    ctx = analyzer.analyze(photo)
+    plan = planner.plan(ctx, scene_hint=scene.preset)
+    ops = [k for k,v in plan.operators.items() if v.enabled]
+    print(f"  🧠 {ctx.scene_type}({ctx.scene_confidence:.2f}) blur={ctx.properties.get('blur_estimate',0):.2f} "
+          f"noise={ctx.properties.get('noise_estimate',0):.2f} lattice={ctx.properties.get('screen_lattice_confidence',0):.2f}")
+    print(f"     ops={ops} notes={plan.notes}")
+    reg = register_reference(photo, ref)
+    H = np.linalg.inv(reg.homography_reference_to_photo); H /= H[2,2]
+    dw = cv2.warpPerspective(photo, H, (rw,rh), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE)
+    pipe = build_default_pipeline(registry)
+    apply_plan(pipe, plan, scene.preset)
+    pc = ProcessingContext(preview=False); pc.metadata["scene_context"] = ctx
+    restored = pipe.process(dw, pc, source_id=f"oracle:{pd.content_hash}")
+    if restored.dtype != np.uint8: restored = np.clip(restored*255,0,255).astype(np.uint8)
+    aw, _ = ecc_refine(dw, ref); ar, _ = ecc_refine(restored, ref)
+    return {
+        "scene":scene.name,"benchmark":"oracle","preset":scene.preset.value,
+        "semantic_scene":ctx.scene_type,"semantic_confidence":ctx.scene_confidence,
+        "registration":reg.to_dict(),"scene_context":ctx.to_dict(),"restoration_plan":plan.to_dict(),
+        "direct_warp_metrics":compare_images(aw,ref),"restored_metrics":compare_images(ar,ref),
+        "images":{"direct_warp":dw,"restored":restored,"diff_restored":difference_heatmap(ar,ref),
+                  "corners_viz":_draw_corners(photo,reg.corners_photo)},
+    }
 
-def _apply_semantic_diagnostics(pipeline: ImagePipeline, ctx) -> None:
-    """根据语义退化诊断微调算子配置。
+def process_e2e(scene, registry, analyzer, planner):
+    pd = load_image(scene.photo); rd = load_image(scene.reference)
+    photo, ref = pd.original_rgb, rd.original_rgb
+    ctx = analyzer.analyze(photo)
+    loc = TargetLocalizer(); ctx = loc.localize(photo, ctx)
+    plan = planner.plan(ctx, scene_hint=scene.preset)
+    if ctx.has_target() and ctx.target_polygon is not None:
+        geo, _ = warp_perspective(photo, ctx.target_polygon, ratio_mode=AspectRatioMode.FREE,
+                                   interpolation=InterpolationMode.LANCZOS, auto_crop=True)
+    else: geo = photo
+    pipe = build_default_pipeline(registry)
+    apply_plan(pipe, plan, scene.preset)
+    pc = ProcessingContext(preview=False); pc.metadata["scene_context"] = ctx
+    restored = pipe.process(geo, pc, source_id=f"e2e:{pd.content_hash}")
+    if restored.dtype != np.uint8: restored = np.clip(restored*255,0,255).astype(np.uint8)
+    rm = compare_images(restored, ref)
+    reg = register_reference(photo, ref)
+    if ctx.target_polygon is not None:
+        diag = math.sqrt(photo.shape[0]**2+photo.shape[1]**2)
+        ce = float(np.mean(np.linalg.norm(ctx.target_polygon-reg.corners_photo,axis=1))/max(diag,1))
+    else: ce = 1.0
+    return {"scene":scene.name,"benchmark":"e2e","preset":scene.preset.value,
+            "has_target":ctx.has_target(),"corner_error_normalized":round(ce,6),
+            "scene_context":ctx.to_dict(),"restoration_plan":plan.to_dict(),
+            "restored_metrics":rm,"images":{"restored":restored}}
 
-    语义分析提供的是退化程度的量化估计，而非场景分类。
-    此函数根据检测到的退化指标调整算子参数强度。
-    """
-    # 根据反光区域调整 reflection 强度
-    if "reflection" in ctx.artifact_masks:
-        ref_area = float(ctx.artifact_masks["reflection"].sum()) / 255.0
-        ref_ratio = ref_area / ctx.artifact_masks["reflection"].size
-        if ref_ratio > 0.01:
-            try:
-                pipeline.set_enabled("reflection", True)
-                ref_params = pipeline.state("reflection").params.to_dict()
-                ref_params["strength"] = min(ref_ratio * 5 + 0.1, 0.8)
-                pipeline.update_parameters("reflection", ref_params)
-            except ValueError:
-                pass
-
-    # 根据摩尔纹区域调整 demoire 强度
-    if "moire" in ctx.artifact_masks:
-        moire_area = float(ctx.artifact_masks["moire"].sum()) / 255.0
-        moire_ratio = moire_area / ctx.artifact_masks["moire"].size
-        if moire_ratio > 0.05:
-            try:
-                pipeline.set_enabled("demoire", True)
-                dm_params = pipeline.state("demoire").params.to_dict()
-                dm_params["strength"] = min(moire_ratio * 3 + 0.3, 1.0)
-                pipeline.update_parameters("demoire", dm_params)
-            except ValueError:
-                pass
-
-    # 根据模糊度调整 sharpen
-    blur = ctx.properties.get("blur_estimate", 0)
-    if blur > 0.6:
-        try:
-            sh_params = pipeline.state("sharpen").params.to_dict()
-            sh_params["amount"] = min(blur * 0.6, 0.5)
-            pipeline.update_parameters("sharpen", sh_params)
-        except ValueError:
-            pass
-
-    # 根据噪声水平调整 denoise
-    noise = ctx.properties.get("noise_estimate", 0)
-    if noise > 0.5:
-        try:
-            pipeline.set_enabled("denoise", True)
-            dn_params = pipeline.state("denoise").params.to_dict()
-            dn_params["strength"] = min(noise * 1.5, 1.0)
-            pipeline.update_parameters("denoise", dn_params)
-        except ValueError:
-            pass
-
-    # 根据黑位偏移调整 exposure
-    black_r = ctx.properties.get("black_level_r", 0)
-    if black_r > 0.03:
-        try:
-            pipeline.set_enabled("exposure", True)
-            exp_params = pipeline.state("exposure").params.to_dict()
-            exp_params["auto_black_level_strength"] = min(black_r * 15, 1.0)
-            pipeline.update_parameters("exposure", exp_params)
-        except ValueError:
-            pass
-
-
-def draw_reference_corners(photo: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """在拍摄图上画出检测到的内容四角。"""
-    img = photo.copy()
-    pts = corners.astype(np.int32).reshape(-1, 1, 2)
-    cv2.polylines(img, [pts], True, (255, 0, 0), 3)
-    for i, pt in enumerate(pts):
-        cv2.putText(img, str(i + 1), (pt[0][0] + 8, pt[0][1] - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 3)
+def _draw_corners(photo, corners):
+    img = photo.copy(); pts = corners.astype(np.int32).reshape(-1,1,2)
+    cv2.polylines(img,[pts],True,(255,0,0),3)
+    for i,pt in enumerate(pts): cv2.putText(img,str(i+1),(pt[0][0]+8,pt[0][1]-8),cv2.FONT_HERSHEY_SIMPLEX,1.5,(255,0,0),3)
     return img
 
+def _save(img, path):
+    if img.dtype != np.uint8: img = np.clip(img*255,0,255).astype(np.uint8)
+    cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
-# ── 主入口 ────────────────────────────────────────────────
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="迭代验证四种场景的恢复质量")
-    parser.add_argument(
-        "--data-dir", type=Path,
-        default=Path(__file__).resolve().parents[1] / "测试数据",
-    )
-    parser.add_argument(
-        "--output-dir", type=Path,
-        default=Path(__file__).resolve().parents[1] / "output",
-    )
-    parser.add_argument(
-        "--version", default="v2",
-        help="输出版本号 (如 v2, v3)",
-    )
-    parser.add_argument("--only", help="只处理名称包含该文本的场景")
-    args = parser.parse_args(argv)
-
-    data_dir = args.data_dir.expanduser().resolve()
-    output_version_dir = (args.output_dir / args.version).expanduser().resolve()
-    output_version_dir.mkdir(parents=True, exist_ok=True)
-
-    scenes = discover_scenes(data_dir)
-    if args.only:
-        scenes = [s for s in scenes if args.only in s.name]
-    if not scenes:
-        print("❌ 没有找到测试场景", file=sys.stderr)
-        return 2
-
-    print(f"\n{'='*60}")
-    print(f"🚀 ScreenRestore 迭代验证 — {args.version}")
-    print(f"   数据目录: {data_dir}")
-    print(f"   输出目录: {output_version_dir}")
-    print(f"   场景数量: {len(scenes)}")
-    print(f"   策略: SIFT单应直接warp → 关闭几何算子 → ECC精修")
-    print(f"   语义层: SemanticAnalyzer + RestorationPlanner")
-    print(f"{'='*60}\n")
-
-    registry = build_registry()
-    analyzer = SemanticAnalyzer()
-    planner = RestorationPlanner()
-    reports = []
-
-    for i, scene in enumerate(scenes):
-        print(f"[{i+1}/{len(scenes)}] {scene.name} (预设={scene.preset.value})")
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--data-dir",type=Path,default=Path(__file__).resolve().parents[1]/"测试数据")
+    p.add_argument("--output-dir",type=Path,default=Path(__file__).resolve().parents[1]/"output")
+    p.add_argument("--version",default="v9")
+    p.add_argument("--only")
+    a = p.parse_args(argv)
+    dd = a.data_dir.expanduser().resolve(); od = (a.output_dir/a.version).expanduser().resolve()
+    od.mkdir(parents=True, exist_ok=True)
+    scenes = discover_scenes(dd)
+    if a.only: scenes = [s for s in scenes if a.only in s.name]
+    if not scenes: print("no scenes",file=sys.stderr); return 2
+    print(f"\n{'='*60}\n🚀 ScreenRestore v9  {len(scenes)} scenes\n{'='*60}\n")
+    reg = build_registry(); ana = SemanticAnalyzer(); pln = RestorationPlanner()
+    reps = []
+    for i,s in enumerate(scenes):
+        print(f"[{i+1}/{len(scenes)}] {s.name} ({s.preset.value})")
         try:
-            result = process_scene(scene, registry, analyzer=analyzer, planner=planner)
-            # 保存图像
-            _save(result["images"]["direct_warp"],
-                  output_version_dir / f"{scene.name}_直接warp.png")
-            _save(result["images"]["restored"],
-                  output_version_dir / f"{scene.name}_恢复.png")
-            _save(result["images"]["diff_warp"],
-                  output_version_dir / f"{scene.name}_warp差异热图.png")
-            _save(result["images"]["diff_restored"],
-                  output_version_dir / f"{scene.name}_恢复差异热图.png")
-            _save(result["images"]["corners_viz"],
-                  output_version_dir / f"{scene.name}_内容定位.png")
-            # 保存语义分析 + 恢复计划
-            (output_version_dir / f"{scene.name}_语义分析.json").write_text(
-                json.dumps(result["scene_context"], ensure_ascii=False, indent=2),
-            )
-            (output_version_dir / f"{scene.name}_恢复计划.json").write_text(
-                json.dumps(result["restoration_plan"], ensure_ascii=False, indent=2),
-            )
-            # 保存图像
-            _save(result["images"]["direct_warp"],
-                  output_version_dir / f"{scene.name}_直接warp.png")
-            _save(result["images"]["restored"],
-                  output_version_dir / f"{scene.name}_恢复.png")
-            _save(result["images"]["diff_warp"],
-                  output_version_dir / f"{scene.name}_warp差异热图.png")
-            _save(result["images"]["diff_restored"],
-                  output_version_dir / f"{scene.name}_恢复差异热图.png")
-            _save(result["images"]["corners_viz"],
-                  output_version_dir / f"{scene.name}_内容定位.png")
-            # 去图像，只保留指标
-            metrics = {k: v for k, v in result.items() if k != "images"}
-            metrics["output_dir"] = str(output_version_dir)
-            reports.append(metrics)
-
-            r = result["restored_metrics"]
-            w = result["direct_warp_metrics"]
-            reg = result["registration"]
-            print(f"  📐 SIFT: {reg['feature_matches']}匹配/{reg['inliers']}内点 "
-                  f"({reg['inlier_ratio']:.1%}) 误差{reg['median_reprojection_error_px']:.1f}px")
-            print(f"  🔧 ECC: {result['restored_alignment'].get('ecc_method','?')} "
-                  f"score={result['restored_alignment'].get('ecc_score',0):.4f} "
-                  f"dx={result['restored_alignment'].get('dx_px',0):.2f}px "
-                  f"dy={result['restored_alignment'].get('dy_px',0):.2f}px")
-            print(f"  ✅ warp → PSNR={w['psnr_db']:.2f}dB SSIM={w['luminance_ssim']:.4f} ΔE={w['delta_e_mean']:.1f}")
-            print(f"  ✅ 恢复 → PSNR={r['psnr_db']:.2f}dB SSIM={r['luminance_ssim']:.4f} ΔE={r['delta_e_mean']:.1f}")
-        except Exception as exc:
-            print(f"  ❌ 失败: {exc}", file=sys.stderr)
-            import traceback
-            traceback.print_exc()
-            reports.append({"scene": scene.name, "error": str(exc)})
-
-    # 汇总报告
-    metrics_path = output_version_dir / "metrics.json"
-    summary = {
-        "version": args.version,
-        "scenes": len(scenes),
-        "reports": reports,
-    }
-    metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"\n📄 报告已保存: {metrics_path}")
-
-    # 打印汇总表
-    _print_summary(reports)
+            r = process_oracle(s, reg, analyzer=ana, planner=pln)
+            for k,fn in [("direct_warp","oracle_warp"),("restored","oracle_恢复"),("diff_restored","oracle_差异热图"),("corners_viz","oracle_定位")]:
+                _save(r["images"][k], od/f"{s.name}_{fn}.png")
+            (od/f"{s.name}_oracle_语义分析.json").write_text(json.dumps(r["scene_context"],ensure_ascii=False,indent=2))
+            (od/f"{s.name}_oracle_恢复计划.json").write_text(json.dumps(r["restoration_plan"],ensure_ascii=False,indent=2))
+            reps.append({k:v for k,v in r.items() if k!="images"})
+            wm,rm = r["direct_warp_metrics"],r["restored_metrics"]
+            print(f"  ✅ Oracle {wm['psnr_db']:.1f}→{rm['psnr_db']:.1f}dB SSIM={rm['luminance_ssim']:.4f} ΔE={rm['delta_e_mean']:.1f} sharp={rm['sharpness_ratio']:.3f} spec={rm['spectral_peak_excess_db']:.3f}")
+            e = process_e2e(s, reg, analyzer=ana, planner=pln)
+            _save(e["images"]["restored"], od/f"{s.name}_e2e_恢复.png")
+            reps.append({k:v for k,v in e.items() if k!="images"})
+            m = e["restored_metrics"]
+            print(f"  ✅ E2E   target={'✓' if e['has_target'] else '✗'} corner_err={e['corner_error_normalized']:.4f} "
+                  f"PSNR={m['psnr_db']:.1f}dB SSIM={m['luminance_ssim']:.4f} ΔE={m['delta_e_mean']:.1f}")
+        except Exception as ex:
+            print(f"  ❌ {ex}",file=sys.stderr); import traceback; traceback.print_exc()
+            reps.append({"scene":s.name,"error":str(ex)})
+    (od/"metrics.json").write_text(json.dumps({"version":a.version,"scenes":len(scenes),"reports":reps},ensure_ascii=False,indent=2))
+    print(f"\n📄 {od}/metrics.json")
+    hdr = f"{'scene':<12} {'bench':>7} {'PSNR':>7} {'SSIM':>7} {'ΔE':>6} {'sharp':>6} {'spec':>7} {'target':>6}"
+    print(f"\n{'='*len(hdr)}\n{hdr}\n{'-'*len(hdr)}")
+    for r in reps:
+        if "error" in r: continue
+        b = r.get("benchmark","?"); m = r.get("restored_metrics",{})
+        has = "✓" if r.get("has_target") else ("-" if b=="oracle" else "✗")
+        print(f"{r['scene']:<12} {b:>7} {m.get('psnr_db',0):>7.2f} {m.get('luminance_ssim',0):>7.4f} "
+              f"{m.get('delta_e_mean',0):>5.1f} {m.get('sharpness_ratio',0):>6.3f} "
+              f"{m.get('spectral_peak_excess_db',0):>7.3f} {has:>6}")
+    print(f"{'='*len(hdr)}\n")
     return 0
 
-
-def _print_summary(reports: list[dict]) -> None:
-    header = f"{'场景':<12} {'真值preset':>14} {'语义猜测':>10} {'SIFT':>7} {'warpPSNR':>8} {'恢复PSNR':>8} {'SSIM':>8} {'ΔE':>6}"
-    print(f"\n{'='*len(header)}")
-    print(header)
-    print(f"{'-'*len(header)}")
-    for r in reports:
-        if "error" in r:
-            print(f"{r['scene']:<12} {'ERROR':>8}")
-            continue
-        reg = r["registration"]
-        wm = r["direct_warp_metrics"]
-        rm = r["restored_metrics"]
-        print(f"{r['scene']:<12} {r.get('preset','?'):>14} {r.get('semantic_scene','?'):>10} "
-              f"{reg['inlier_ratio']:>6.1%} "
-              f"{wm['psnr_db']:>8.2f} {rm['psnr_db']:>8.2f} "
-              f"{rm['luminance_ssim']:>8.4f} {rm['delta_e_mean']:>5.1f}")
-    print(f"{'='*len(header)}\n")
-    print(f"{'='*len(header)}\n")
-
-
-def _save(image: np.ndarray, path: Path) -> None:
-    """保存 uint8 RGB 图像为 PNG。"""
-    if image.dtype != np.uint8:
-        image = np.clip(image * 255.0, 0, 255).astype(np.uint8)
-    cv2.imwrite(str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__": raise SystemExit(main())

@@ -1,0 +1,27 @@
+{
+  "scene_type": "glossy_artwork",
+  "scene_confidence": 0.7054,
+  "recommended_preset": "glossy_artwork",
+  "user_preset": "glossy_artwork",
+  "operators": {
+    "geometry": {
+      "enabled": true,
+      "strength": 1.0,
+      "params": {},
+      "reason": "艺术品/画作场景需要透视校正"
+    },
+    "lens_distortion": {
+      "enabled": true,
+      "strength": 0.5,
+      "params": {},
+      "reason": "画作拍摄常有镜头畸变"
+    },
+    "reflection": {
+      "enabled": true,
+      "strength": 0.41095327643303653,
+      "params": {},
+      "reason": "覆膜/玻璃场景, 反光面积=3.70%, 存在饱和反光 → 建议多帧"
+    }
+  },
+  "notes": []
+}

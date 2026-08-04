@@ -1,0 +1,23 @@
+{
+  "scene_type": "display",
+  "scene_confidence": 0.8166,
+  "recommended_preset": "display",
+  "user_preset": "display",
+  "operators": {
+    "geometry": {
+      "enabled": true,
+      "strength": 0.5,
+      "params": {},
+      "reason": "显示器场景透视校正 (目标=待定位)"
+    },
+    "demoire": {
+      "enabled": true,
+      "strength": 1.0,
+      "params": {
+        "mode": "joint_edge_aware"
+      },
+      "reason": "显示器场景, moire_ratio=0.547 screen_conf=0.00"
+    }
+  },
+  "notes": []
+}

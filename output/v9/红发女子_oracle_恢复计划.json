@@ -1,0 +1,26 @@
+{
+  "scene_type": "cinema",
+  "scene_confidence": 0.6669,
+  "recommended_preset": "cinema",
+  "user_preset": "cinema",
+  "operators": {
+    "dehalo": {
+      "enabled": true,
+      "strength": 0.3,
+      "params": {
+        "auto_gate": true
+      },
+      "reason": "电影院场景轻度去光晕 (auto_gate)"
+    },
+    "denoise": {
+      "enabled": true,
+      "strength": 0.15,
+      "params": {
+        "mode": "luma_chroma",
+        "chroma_strength": 3.0
+      },
+      "reason": "电影院场景轻度去噪"
+    }
+  },
+  "notes": []
+}

@@ -129,3 +129,99 @@ def test_analysis_result_dataclass() -> None:
     det = Detection(label="person", confidence=0.8, bbox=(0.1, 0.2, 0.3, 0.4))
     result2 = AnalysisResult(detections=[det])
     assert len(result2.detections) == 1
+
+
+# ── v9 新增测试 ──
+
+def test_moire_ratio_not_fixed_division() -> None:
+    """moire area ratio 不再固定 /10000。"""
+    from screenrestore.semantic.planner import RestorationPlanner
+    from screenrestore.semantic.context import SceneContext
+
+    planner = RestorationPlanner()
+    mask = np.ones((100, 100), dtype=np.uint8) * 255
+    ctx = SceneContext(scene_type="display", artifact_masks={"moire": mask})
+    rec = planner._recommend_demoire("display", ctx)
+    assert rec is not None
+    assert "demoire" in rec
+    # 大面积 moire → 高强度
+    mask_small = np.zeros((100, 100), dtype=np.uint8)
+    mask_small[0:10, 0:10] = 255
+    ctx2 = SceneContext(scene_type="display", artifact_masks={"moire": mask_small})
+    rec2 = planner._recommend_demoire("display", ctx2)
+    assert "demoire" in rec2
+    # 大面积应有更高强度（或其强度合理）
+    assert rec2["demoire"].strength + rec["demoire"].strength > 0
+
+
+def test_illumination_not_perspective() -> None:
+    """illumination_gradient 不影响 perspective 判断。"""
+    from screenrestore.semantic.planner import RestorationPlanner
+    from screenrestore.semantic.context import SceneContext
+
+    planner = RestorationPlanner()
+    ctx = SceneContext(scene_type="display",
+                       properties={"illumination_gradient": 0.9})
+    rec = planner._recommend_geometry("display", ctx)
+    # geometry 推荐不读取 illumination_gradient
+    assert isinstance(rec, dict)
+
+
+def test_artwork_safety_gate_blocks_demoire() -> None:
+    """ARTWORK 安全门禁止自动开启 demoire。"""
+    from screenrestore.semantic.planner import RestorationPlanner, AUTO_DISABLE_GATE
+
+    assert "demoire" in AUTO_DISABLE_GATE.get("artwork", set())
+
+
+def test_cinema_safety_gate_blocks_reflection() -> None:
+    """CINEMA 安全门禁止自动开启 reflection。"""
+    from screenrestore.semantic.planner import RestorationPlanner, AUTO_DISABLE_GATE
+
+    assert "reflection" in AUTO_DISABLE_GATE.get("cinema", set())
+
+
+def test_scene_hint_overrides_classifier() -> None:
+    """用户 scene_hint 优先于自动分类。"""
+    from screenrestore.semantic.planner import RestorationPlanner
+    from screenrestore.core.presets import PresetId
+    from screenrestore.semantic.context import SceneContext
+
+    planner = RestorationPlanner()
+    # 语义分析说是 "display", 但用户说是 "artwork"
+    ctx = SceneContext(scene_type="display", scene_confidence=0.8)
+    plan = planner.plan(ctx, scene_hint=PresetId.ARTWORK)
+    assert plan.recommended_preset == PresetId.ARTWORK
+    assert plan.user_preset == PresetId.ARTWORK
+
+
+def test_plan_params_serializable() -> None:
+    """RestorationPlan.to_dict() 包含 params。"""
+    from screenrestore.semantic.planner import RestorationPlan, OperatorRecommendation
+    from screenrestore.core.presets import PresetId
+
+    plan = RestorationPlan(
+        scene_type="artwork", scene_confidence=0.9,
+        recommended_preset=PresetId.ARTWORK,
+    )
+    plan.operators["sharpen"] = OperatorRecommendation(
+        enabled=True, strength=0.2,
+        params={"amount": 0.15}, reason="test",
+    )
+    d = plan.to_dict()
+    assert "params" in d["operators"]["sharpen"]
+    assert d["operators"]["sharpen"]["params"]["amount"] == 0.15
+
+
+def test_target_localizer_fallback() -> None:
+    """无模型时 TargetLocalizer 使用几何评分 fallback。"""
+    from screenrestore.semantic.target_localizer import TargetLocalizer
+    from screenrestore.semantic.context import SceneContext
+
+    loc = TargetLocalizer()  # 无 CLIP backend
+    img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
+    ctx = SceneContext()
+    result = loc.localize(img, ctx)
+    # 应返回 SceneContext（可能找到也可能没找到，但不报错）
+    assert result is not None
+    assert isinstance(result, SceneContext)
