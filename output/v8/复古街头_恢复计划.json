@@ -1,0 +1,28 @@
+{
+  "scene_type": "display",
+  "scene_confidence": 0.7054,
+  "recommended_preset": "display",
+  "operators": {
+    "geometry": {
+      "enabled": true,
+      "strength": 0.9804,
+      "reason": "透视强度=0.49"
+    },
+    "demoire": {
+      "enabled": true,
+      "strength": 1.0,
+      "reason": "显示器场景, 摩尔纹概率=1.00"
+    },
+    "reflection": {
+      "enabled": true,
+      "strength": 0.18492212738839425,
+      "reason": "检测到反光区域 (3.7%)"
+    },
+    "denoise": {
+      "enabled": true,
+      "strength": 0.9678,
+      "reason": "噪声水平=0.48"
+    }
+  },
+  "notes": []
+}

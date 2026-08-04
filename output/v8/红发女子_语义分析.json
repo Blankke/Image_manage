@@ -1,0 +1,24 @@
+{
+  "scene_type": "display",
+  "scene_confidence": 0.6669,
+  "has_target": false,
+  "target_bbox": null,
+  "semantic_labels": [
+    "flat_region",
+    "fine_texture"
+  ],
+  "artifact_labels": [
+    "reflection",
+    "moire"
+  ],
+  "properties": {
+    "blur_estimate": 0.9179,
+    "noise_estimate": 0.0,
+    "highlight_clipping": 0.0002,
+    "shadow_clipping": 0.1017,
+    "illumination_gradient": 0.7555,
+    "black_level_r": 0.0,
+    "black_level_g": 0.0,
+    "black_level_b": 0.0
+  }
+}

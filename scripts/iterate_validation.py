@@ -1,24 +1,24 @@
 """迭代验证脚本：处理四种场景测试图像，保存输出版本并生成数值对比报告。
 
-v2 改进：
-  - 直接使用 SIFT 单应矩阵将照片 warp 到精确参考图尺寸，
-    绕过 GeometryOperator 以避免 output_size ≠ reference_size 的二次插值。
-  - warp 后关闭所有几何相关算子（orientation/lens/geometry/mesh），
-    只运行色彩/去噪/反光等恢复算子。
-  - 新增 ECC 平移精修，矫正 SIFT 的亚像素残余偏差。
+v5 改进：
+  - 增加 SemanticAnalyzer 前置语义分析层
+  - 增加 RestorationPlanner 自动推荐算子配置
+  - SceneContext + RestorationPlan 写入诊断报告
+  - 保留 v4 的直接单应 warp + ECC 精修对齐策略
 
 用法:
     source .venv/bin/activate
-    python scripts/iterate_validation.py                # 默认 v2
-    python scripts/iterate_validation.py --version v3   # 指定版本
-    python scripts/iterate_validation.py --mode v1      # 旧版对比
+    python scripts/iterate_validation.py                # 默认 v5
+    python scripts/iterate_validation.py --version v6   # 指定版本
 
 输出:
     output/<version>/
         <场景>_恢复.png          处理结果
-        <场景>_直接warp.png      SIFT 单应直接 warp（不经流水线几何）
+        <场景>_直接warp.png      SIFT 单应直接 warp
         <场景>_差异热图.png      可视化差异
-        <场景>_内容定位.png      检测到的内容区域
+        <场景>_内容定位.png      SIFT 检测到的内容区域
+        scene_context.json       语义分析结果
+        restoration_plan.json    恢复计划
         metrics.json             数值指标汇总
 """
 
@@ -45,6 +45,11 @@ from screenrestore.core.presets import (
     build_registry,
 )
 from screenrestore.io.image_loader import load_image
+from screenrestore.semantic import (
+    SceneContext,
+    SemanticAnalyzer,
+    RestorationPlanner,
+)
 from screenrestore.validation import (
     ReferenceRegistration,
     compare_images,
@@ -179,14 +184,36 @@ def ecc_refine(
 def process_scene(
     scene: SceneCase,
     registry: OperatorRegistry,
+    *,
+    analyzer: SemanticAnalyzer | None = None,
+    planner: RestorationPlanner | None = None,
 ) -> dict:
-    """处理单个场景：SIFT 配准 → 直接单应 warp 到参考尺寸 → 关闭几何 → 恢复。"""
+    """处理单个场景：语义分析 → SIFT 配准 → 直接单应 warp → 恢复。"""
     print(f"  📷 加载 {scene.name} ...")
     photo_doc = load_image(scene.photo)
     ref_doc = load_image(scene.reference)
     photo = photo_doc.original_rgb
     reference = ref_doc.original_rgb
     rh, rw = reference.shape[:2]
+
+    # 0) 语义分析
+    print(f"  🧠 语义分析 {scene.name} ...")
+    _analyzer = analyzer or SemanticAnalyzer()
+    scene_ctx = _analyzer.analyze(photo)
+    print(f"     场景: {scene_ctx.scene_type} (置信度={scene_ctx.scene_confidence:.2f})")
+    print(f"     退化: blur={scene_ctx.properties.get('blur_estimate',0):.2f} "
+          f"noise={scene_ctx.properties.get('noise_estimate',0):.2f} "
+          f"illum={scene_ctx.properties.get('illumination_gradient',0):.2f}")
+    if scene_ctx.artifact_masks:
+        print(f"     伪影: {list(scene_ctx.artifact_masks.keys())}")
+
+    # 0b) 恢复计划
+    _planner = planner or RestorationPlanner()
+    plan = _planner.plan(scene_ctx)
+    print(f"     推荐 preset: {plan.recommended_preset.value}")
+    active_ops = [op_id for op_id, rec in plan.operators.items() if rec.enabled]
+    if active_ops:
+        print(f"     推荐算子: {active_ops}")
 
     # 1) SIFT 配准：参考图 → 拍摄图
     print(f"  🎯 SIFT 配准 {scene.name} ...")
@@ -202,15 +229,18 @@ def process_scene(
     )
     print(f"  📐 直接 warp: {photo.shape[1]}x{photo.shape[0]} → {rw}x{rh}")
 
-    # 3) 构建恢复流水线（关闭所有几何算子）
-    print(f"  ⚙ 构建流水线 preset={scene.preset.value} ...")
+    # 3) 构建恢复流水线 — 使用场景已知 preset + 语义退化诊断
+    print(f"  ⚙ 构建流水线 preset={scene.preset.value} (已知正确类型) ...")
     pipeline = build_restoration_pipeline(registry, scene.preset)
+    # 语义分析提供退化诊断，补充 preset 未覆盖的细节
+    _apply_semantic_diagnostics(pipeline, scene_ctx)
     context = ProcessingContext(preview=False)
+    # 将 scene_ctx 注入 context metadata，供下游算子使用
+    context.metadata["scene_context"] = scene_ctx
     restored = pipeline.process(
         direct_warp, context,
         source_id=f"iterate:{photo_doc.content_hash}",
     )
-    # pipeline 输出是 float32 [0,1]，转回 uint8
     if restored.dtype != np.uint8:
         restored = np.clip(restored * 255.0, 0, 255).astype(np.uint8)
 
@@ -231,10 +261,14 @@ def process_scene(
     return {
         "scene": scene.name,
         "preset": scene.preset.value,
+        "semantic_scene": scene_ctx.scene_type,
+        "semantic_confidence": scene_ctx.scene_confidence,
         "photo_size": [photo.shape[1], photo.shape[0]],
         "reference_size": [rw, rh],
         "warp_output_size": [direct_warp.shape[1], direct_warp.shape[0]],
         "restored_output_size": [restored.shape[1], restored.shape[0]],
+        "scene_context": scene_ctx.to_dict(),
+        "restoration_plan": plan.to_dict(),
         "registration": registration.to_dict(),
         "warp_alignment": warp_alignment,
         "restored_alignment": restored_alignment,
@@ -266,6 +300,71 @@ def build_restoration_pipeline(
         pipeline.set_enabled(geo_op, False)
 
     return pipeline
+
+
+def _apply_semantic_diagnostics(pipeline: ImagePipeline, ctx) -> None:
+    """根据语义退化诊断微调算子配置。
+
+    语义分析提供的是退化程度的量化估计，而非场景分类。
+    此函数根据检测到的退化指标调整算子参数强度。
+    """
+    # 根据反光区域调整 reflection 强度
+    if "reflection" in ctx.artifact_masks:
+        ref_area = float(ctx.artifact_masks["reflection"].sum()) / 255.0
+        ref_ratio = ref_area / ctx.artifact_masks["reflection"].size
+        if ref_ratio > 0.01:
+            try:
+                pipeline.set_enabled("reflection", True)
+                ref_params = pipeline.state("reflection").params.to_dict()
+                ref_params["strength"] = min(ref_ratio * 5 + 0.1, 0.8)
+                pipeline.update_parameters("reflection", ref_params)
+            except ValueError:
+                pass
+
+    # 根据摩尔纹区域调整 demoire 强度
+    if "moire" in ctx.artifact_masks:
+        moire_area = float(ctx.artifact_masks["moire"].sum()) / 255.0
+        moire_ratio = moire_area / ctx.artifact_masks["moire"].size
+        if moire_ratio > 0.05:
+            try:
+                pipeline.set_enabled("demoire", True)
+                dm_params = pipeline.state("demoire").params.to_dict()
+                dm_params["strength"] = min(moire_ratio * 3 + 0.3, 1.0)
+                pipeline.update_parameters("demoire", dm_params)
+            except ValueError:
+                pass
+
+    # 根据模糊度调整 sharpen
+    blur = ctx.properties.get("blur_estimate", 0)
+    if blur > 0.6:
+        try:
+            sh_params = pipeline.state("sharpen").params.to_dict()
+            sh_params["amount"] = min(blur * 0.6, 0.5)
+            pipeline.update_parameters("sharpen", sh_params)
+        except ValueError:
+            pass
+
+    # 根据噪声水平调整 denoise
+    noise = ctx.properties.get("noise_estimate", 0)
+    if noise > 0.5:
+        try:
+            pipeline.set_enabled("denoise", True)
+            dn_params = pipeline.state("denoise").params.to_dict()
+            dn_params["strength"] = min(noise * 1.5, 1.0)
+            pipeline.update_parameters("denoise", dn_params)
+        except ValueError:
+            pass
+
+    # 根据黑位偏移调整 exposure
+    black_r = ctx.properties.get("black_level_r", 0)
+    if black_r > 0.03:
+        try:
+            pipeline.set_enabled("exposure", True)
+            exp_params = pipeline.state("exposure").params.to_dict()
+            exp_params["auto_black_level_strength"] = min(black_r * 15, 1.0)
+            pipeline.update_parameters("exposure", exp_params)
+        except ValueError:
+            pass
 
 
 def draw_reference_corners(photo: np.ndarray, corners: np.ndarray) -> np.ndarray:
@@ -315,15 +414,36 @@ def main(argv: list[str] | None = None) -> int:
     print(f"   输出目录: {output_version_dir}")
     print(f"   场景数量: {len(scenes)}")
     print(f"   策略: SIFT单应直接warp → 关闭几何算子 → ECC精修")
+    print(f"   语义层: SemanticAnalyzer + RestorationPlanner")
     print(f"{'='*60}\n")
 
     registry = build_registry()
+    analyzer = SemanticAnalyzer()
+    planner = RestorationPlanner()
     reports = []
 
     for i, scene in enumerate(scenes):
-        print(f"[{i+1}/{len(scenes)}] {scene.name} (preset={scene.preset.value})")
+        print(f"[{i+1}/{len(scenes)}] {scene.name} (预设={scene.preset.value})")
         try:
-            result = process_scene(scene, registry)
+            result = process_scene(scene, registry, analyzer=analyzer, planner=planner)
+            # 保存图像
+            _save(result["images"]["direct_warp"],
+                  output_version_dir / f"{scene.name}_直接warp.png")
+            _save(result["images"]["restored"],
+                  output_version_dir / f"{scene.name}_恢复.png")
+            _save(result["images"]["diff_warp"],
+                  output_version_dir / f"{scene.name}_warp差异热图.png")
+            _save(result["images"]["diff_restored"],
+                  output_version_dir / f"{scene.name}_恢复差异热图.png")
+            _save(result["images"]["corners_viz"],
+                  output_version_dir / f"{scene.name}_内容定位.png")
+            # 保存语义分析 + 恢复计划
+            (output_version_dir / f"{scene.name}_语义分析.json").write_text(
+                json.dumps(result["scene_context"], ensure_ascii=False, indent=2),
+            )
+            (output_version_dir / f"{scene.name}_恢复计划.json").write_text(
+                json.dumps(result["restoration_plan"], ensure_ascii=False, indent=2),
+            )
             # 保存图像
             _save(result["images"]["direct_warp"],
                   output_version_dir / f"{scene.name}_直接warp.png")
@@ -373,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _print_summary(reports: list[dict]) -> None:
-    header = f"{'场景':<12} {'SIFT内点率':>9} {'warpPSNR':>8} {'恢复PSNR':>8} {'SSIM':>8} {'ΔE':>7} {'梯度相关':>8} {'ECC方法':>10}"
+    header = f"{'场景':<12} {'真值preset':>14} {'语义猜测':>10} {'SIFT':>7} {'warpPSNR':>8} {'恢复PSNR':>8} {'SSIM':>8} {'ΔE':>6}"
     print(f"\n{'='*len(header)}")
     print(header)
     print(f"{'-'*len(header)}")
@@ -384,12 +504,11 @@ def _print_summary(reports: list[dict]) -> None:
         reg = r["registration"]
         wm = r["direct_warp_metrics"]
         rm = r["restored_metrics"]
-        al = r["restored_alignment"]
-        print(f"{r['scene']:<12} {reg['inlier_ratio']:>8.1%} "
+        print(f"{r['scene']:<12} {r.get('preset','?'):>14} {r.get('semantic_scene','?'):>10} "
+              f"{reg['inlier_ratio']:>6.1%} "
               f"{wm['psnr_db']:>8.2f} {rm['psnr_db']:>8.2f} "
-              f"{rm['luminance_ssim']:>8.4f} {rm['delta_e_mean']:>6.1f} "
-              f"{rm['gradient_correlation']:>8.4f} "
-              f"{al.get('ecc_method','?'):>10}")
+              f"{rm['luminance_ssim']:>8.4f} {rm['delta_e_mean']:>5.1f}")
+    print(f"{'='*len(header)}\n")
     print(f"{'='*len(header)}\n")
 
 

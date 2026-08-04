@@ -1,0 +1,43 @@
+{
+  "scene_type": "glossy_artwork",
+  "scene_confidence": 0.8166,
+  "recommended_preset": "glossy_artwork",
+  "operators": {
+    "geometry": {
+      "enabled": true,
+      "strength": 1.0,
+      "reason": "艺术品/画作场景需要透视校正"
+    },
+    "lens_distortion": {
+      "enabled": true,
+      "strength": 0.5,
+      "reason": "画作拍摄常有镜头畸变"
+    },
+    "demoire": {
+      "enabled": true,
+      "strength": 1.0,
+      "reason": "检测到摩尔纹 (置信度=1.00)"
+    },
+    "reflection": {
+      "enabled": true,
+      "strength": 0.7986501736111111,
+      "reason": "覆膜/玻璃场景, 反光面积=16.6%, 存在饱和反光 → 建议多帧"
+    },
+    "denoise": {
+      "enabled": true,
+      "strength": 0.6168,
+      "reason": "噪声水平=0.31"
+    },
+    "sharpen": {
+      "enabled": true,
+      "strength": 0.4448000000000001,
+      "reason": "模糊度=0.56"
+    },
+    "clahe": {
+      "enabled": false,
+      "strength": 0.0,
+      "reason": "艺术品场景关闭 CLAHE (保护原作对比度/防放大反光)"
+    }
+  },
+  "notes": []
+}

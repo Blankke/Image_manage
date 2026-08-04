@@ -12,18 +12,37 @@ from .backend import InferenceError
 
 
 class ModelRole(StrEnum):
-    """模型在流水线中的语义位置。"""
+    """模型在流水线中的语义位置。
 
+    ANALYSIS:       场景分类、目标检测、语义分割 → 输出 SceneContext
+    RESTORATION:    去噪、去模糊、去摩尔纹 → 输出同尺寸 RGB 图像
+    RECONSTRUCTION: 反光去除、inpainting、特定退化逆变换 → 输出同尺寸 RGB 图像
+    ENHANCEMENT:    超分、感知增强、生成纹理 → 输出可不同尺寸 RGB 图像
+    """
+
+    ANALYSIS = "analysis"
     RESTORATION = "restoration"
+    RECONSTRUCTION = "reconstruction"
     ENHANCEMENT = "enhancement"
 
 
 ALLOWED_MODEL_TASKS = {
+    # ANALYSIS
+    "scene_classification",
+    "object_detection",
+    "segmentation",
+    "artifact_segmentation",
+    # RESTORATION
     "deblur",
     "demoire",
     "deband",
     "denoise",
     "screen_restoration",
+    # RECONSTRUCTION
+    "reflection_removal",
+    "inpainting",
+    "generative_reconstruction",
+    # ENHANCEMENT
     "perceptual_restoration",
     "super_resolution",
 }
@@ -64,7 +83,9 @@ class ModelManifest:
         try:
             role = ModelRole(str(data["role"]))
         except ValueError as exc:
-            raise InferenceError("模型 role 必须是 restoration 或 enhancement") from exc
+            raise InferenceError(
+                "模型 role 必须是 analysis / restoration / reconstruction / enhancement"
+            ) from exc
         task = str(data["task"])
         if task not in ALLOWED_MODEL_TASKS:
             raise InferenceError(f"不支持的模型任务：{task}")
