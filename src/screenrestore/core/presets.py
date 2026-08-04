@@ -47,6 +47,8 @@ class PresetId(StrEnum):
     CINEMA = "cinema"
     LED = "led"
     DOCUMENT = "document"
+    ARTWORK = "artwork"
+    GLOSSY_ARTWORK = "glossy_artwork"
     CUSTOM = "custom"
 
 
@@ -63,6 +65,8 @@ PRESET_NAMES = {
     PresetId.CINEMA: "电影院/投影（忠实）",
     PresetId.LED: "LED 大屏",
     PresetId.DOCUMENT: "文档/PPT",
+    PresetId.ARTWORK: "艺术品/画作（色彩忠实）",
+    PresetId.GLOSSY_ARTWORK: "覆膜/玻璃反光",
     PresetId.CUSTOM: "自定义",
 }
 
@@ -315,5 +319,139 @@ def _preset_definitions() -> dict[PresetId, dict[str, tuple[bool, dict[str, Any]
             "clahe": (True, ClaheParameters(strength=0.34, clip_limit=1.7).to_dict()),
             "illumination": (True, IlluminationParameters(strength=0.4).to_dict()),
             "sharpen": (True, SharpenParameters(amount=0.46).to_dict()),
+        },
+        # ── 场景 1：艺术品斜拍 ──
+        # 目标：摄影式复现（photographic/colorimetric reproduction）
+        # 约束：色彩忠实度优先于锐度；不自动修改构图比例
+        # 油画、摄影作品的暗部、低对比度、暖色调是创作意图，不得被"修正"
+        PresetId.ARTWORK: {
+            **display,
+            # 镜头畸变在画作拍摄中常见，默认启用
+            "lens_distortion": (
+                True,
+                LensDistortionOperator().default_parameters().to_dict(),
+            ),
+            # 关闭所有可能破坏原作意图的算子
+            "banding": (False, BandingParameters(strength=0.0).to_dict()),
+            "demoire": (False, DemoireParameters(mode=DemoireMode.CHROMA, strength=0.0).to_dict()),
+            "denoise": (
+                True,
+                DenoiseParameters(
+                    mode=DenoiseMode.LUMA_CHROMA,
+                    strength=0.06,
+                    luma_strength=0.8,
+                    chroma_strength=1.2,
+                ).to_dict(),
+            ),
+            "white_balance": (
+                True,
+                WhiteBalanceParameters(
+                    mode=WhiteBalanceMode.WHITE_PATCH,
+                    max_gain=1.10,
+                    strength=0.15,
+                ).to_dict(),
+            ),
+            "exposure": (
+                True,
+                ExposureParameters(
+                    exposure=0.0,
+                    contrast=0.02,
+                    auto_black_level_strength=0.0,
+                    auto_white_background_strength=0.0,
+                ).to_dict(),
+            ),
+            "clahe": (False, ClaheParameters(strength=0.0).to_dict()),
+            "illumination": (
+                True,
+                IlluminationParameters(strength=0.08).to_dict(),
+            ),
+            "reflection": (
+                False,
+                ReflectionParameters(
+                    mode=ReflectionMode.HIGHLIGHT_MASK,
+                    strength=0.0,
+                ).to_dict(),
+            ),
+            "dehalo": (False, DehaloParameters().to_dict()),
+            "deblur": (False, DeblurOperator().default_parameters().to_dict()),
+            "sharpen": (
+                True,
+                SharpenParameters(
+                    radius=0.6,
+                    amount=0.10,
+                    threshold=0.015,
+                    highlight_protection=0.6,
+                    shadow_protection=0.5,
+                ).to_dict(),
+            ),
+        },
+        # ── 场景 4：透明覆盖层反光 ──
+        # 退化模型 I = αT + βR（透射 + 反射）
+        # 按反光强度分层：轻微(HSV高光压缩) → 中等(Gradient-domain separation) → 强烈(inpainting ≤8%)
+        # Reflection mask 在原始 radiometric image 上检测，CLAHE 永远关闭
+        PresetId.GLOSSY_ARTWORK: {
+            **display,
+            "lens_distortion": (
+                True,
+                LensDistortionOperator().default_parameters().to_dict(),
+            ),
+            "banding": (False, BandingParameters(strength=0.0).to_dict()),
+            "demoire": (False, DemoireParameters(mode=DemoireMode.CHROMA, strength=0.0).to_dict()),
+            "denoise": (
+                True,
+                DenoiseParameters(
+                    mode=DenoiseMode.LUMA_CHROMA,
+                    strength=0.08,
+                    luma_strength=1.0,
+                    chroma_strength=1.5,
+                ).to_dict(),
+            ),
+            "white_balance": (
+                True,
+                WhiteBalanceParameters(
+                    mode=WhiteBalanceMode.WHITE_PATCH,
+                    max_gain=1.12,
+                    strength=0.15,
+                ).to_dict(),
+            ),
+            "exposure": (
+                True,
+                ExposureParameters(
+                    exposure=0.0,
+                    contrast=0.03,
+                    auto_black_level_strength=0.0,
+                    auto_white_background_strength=0.0,
+                ).to_dict(),
+            ),
+            # CLAHE 会放大反光 → 永远关闭
+            "clahe": (False, ClaheParameters(strength=0.0).to_dict()),
+            "illumination": (
+                True,
+                IlluminationParameters(strength=0.12).to_dict(),
+            ),
+            # 反射检测和抑制
+            "reflection": (
+                True,
+                ReflectionParameters(
+                    mode=ReflectionMode.HIGHLIGHT_MASK,
+                    bright_threshold=0.85,
+                    low_saturation_threshold=0.15,
+                    strength=0.35,
+                    feather_radius=8.0,
+                ).to_dict(),
+            ),
+            "dehalo": (False, DehaloParameters().to_dict()),
+            "deblur": (False, DeblurOperator().default_parameters().to_dict()),
+            "sharpen": (
+                True,
+                SharpenParameters(
+                    radius=0.6,
+                    amount=0.10,
+                    threshold=0.015,
+                    highlight_protection=0.6,
+                    shadow_protection=0.5,
+                ).to_dict(),
+            ),
+            # 多帧融合提示：UI 应建议用户提供多角度照片
         },
     }

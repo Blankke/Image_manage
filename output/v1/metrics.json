@@ -1,0 +1,630 @@
+{
+  "version": "v1",
+  "scenes": 4,
+  "reports": [
+    {
+      "scene": "后台芭蕾",
+      "preset": "artwork",
+      "photo_size": [
+        1280,
+        1707
+      ],
+      "reference_size": [
+        1131,
+        1391
+      ],
+      "geo_output_size": [
+        911,
+        1121
+      ],
+      "restored_output_size": [
+        911,
+        1121
+      ],
+      "registration": {
+        "feature_matches": 329,
+        "inliers": 225,
+        "inlier_ratio": 0.683891,
+        "median_reprojection_error_px": 1.40763,
+        "p95_reprojection_error_px": 3.152311,
+        "corners_photo": [
+          [
+            250.58700561523438,
+            288.87701416015625
+          ],
+          [
+            1120.06396484375,
+            221.0469970703125
+          ],
+          [
+            1101.97998046875,
+            1316.9949951171875
+          ],
+          [
+            296.97900390625,
+            1458.7080078125
+          ]
+        ]
+      },
+      "geo_direct_metrics": {
+        "mae_255": 49.507912,
+        "psnr_db": 11.14129,
+        "luminance_ssim": 0.594563,
+        "gradient_correlation": 0.343082,
+        "delta_e_mean": 22.699722,
+        "delta_e_p95": 75.381233,
+        "luminance_bias": 0.183173,
+        "contrast_ratio": 1.061147,
+        "sharpness_ratio": 0.95712,
+        "spectral_peak_ratio": 7.509677,
+        "spectral_peak_excess_db": -1.510629,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.000209
+      },
+      "restored_direct_metrics": {
+        "mae_255": 48.523848,
+        "psnr_db": 11.334674,
+        "luminance_ssim": 0.593708,
+        "gradient_correlation": 0.34321,
+        "delta_e_mean": 22.363062,
+        "delta_e_p95": 73.43782,
+        "luminance_bias": 0.177753,
+        "contrast_ratio": 1.023237,
+        "sharpness_ratio": 0.973351,
+        "spectral_peak_ratio": 7.501126,
+        "spectral_peak_excess_db": -1.515577,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.00013
+      },
+      "geo_aligned_metrics": {
+        "mae_255": 49.217121,
+        "psnr_db": 11.190594,
+        "luminance_ssim": 0.598292,
+        "gradient_correlation": 0.361604,
+        "delta_e_mean": 22.580324,
+        "delta_e_p95": 75.163109,
+        "luminance_bias": 0.182372,
+        "contrast_ratio": 1.059363,
+        "sharpness_ratio": 0.956162,
+        "spectral_peak_ratio": 7.512477,
+        "spectral_peak_excess_db": -1.50901,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.000193
+      },
+      "restored_aligned_metrics": {
+        "mae_255": 48.214066,
+        "psnr_db": 11.390706,
+        "luminance_ssim": 0.597242,
+        "gradient_correlation": 0.364677,
+        "delta_e_mean": 22.235615,
+        "delta_e_p95": 73.191055,
+        "luminance_bias": 0.176839,
+        "contrast_ratio": 1.021238,
+        "sharpness_ratio": 0.972802,
+        "spectral_peak_ratio": 7.492278,
+        "spectral_peak_excess_db": -1.520703,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.000146
+      },
+      "geo_alignment": {
+        "feature_matches": 417,
+        "inliers": 266,
+        "inlier_ratio": 0.63789,
+        "median_reprojection_error_px": 1.383905,
+        "p95_reprojection_error_px": 2.738924,
+        "corners_photo": [
+          [
+            -0.04399999976158142,
+            -0.5910000205039978
+          ],
+          [
+            907.7930297851562,
+            1.7630000114440918
+          ],
+          [
+            908.6290283203125,
+            1119.85205078125
+          ],
+          [
+            -0.8769999742507935,
+            1121.7679443359375
+          ]
+        ]
+      },
+      "restored_alignment": {
+        "feature_matches": 418,
+        "inliers": 270,
+        "inlier_ratio": 0.645933,
+        "median_reprojection_error_px": 1.382676,
+        "p95_reprojection_error_px": 2.813313,
+        "corners_photo": [
+          [
+            0.0729999989271164,
+            -0.2680000066757202
+          ],
+          [
+            907.5189819335938,
+            1.9630000591278076
+          ],
+          [
+            908.9660034179688,
+            1120.3179931640625
+          ],
+          [
+            -0.9779999852180481,
+            1122.06396484375
+          ]
+        ]
+      },
+      "output_dir": "/home/czc/gadget/output/v1"
+    },
+    {
+      "scene": "复古街头",
+      "preset": "glossy_artwork",
+      "photo_size": [
+        1702,
+        1276
+      ],
+      "reference_size": [
+        1448,
+        1086
+      ],
+      "geo_output_size": [
+        1021,
+        766
+      ],
+      "restored_output_size": [
+        1021,
+        766
+      ],
+      "registration": {
+        "feature_matches": 1327,
+        "inliers": 1093,
+        "inlier_ratio": 0.823662,
+        "median_reprojection_error_px": 1.160106,
+        "p95_reprojection_error_px": 2.688263,
+        "corners_photo": [
+          [
+            200.78500366210938,
+            357.45599365234375
+          ],
+          [
+            1172.2080078125,
+            294.24798583984375
+          ],
+          [
+            1304.156982421875,
+            957.64599609375
+          ],
+          [
+            325.97698974609375,
+            1134.112060546875
+          ]
+        ]
+      },
+      "geo_direct_metrics": {
+        "mae_255": 37.419875,
+        "psnr_db": 14.149104,
+        "luminance_ssim": 0.428884,
+        "gradient_correlation": 0.426862,
+        "delta_e_mean": 21.953611,
+        "delta_e_p95": 50.143566,
+        "luminance_bias": -0.022104,
+        "contrast_ratio": 0.700251,
+        "sharpness_ratio": 0.116975,
+        "spectral_peak_ratio": 19.622688,
+        "spectral_peak_excess_db": 0.429532,
+        "black_clipping_ratio": 1.4e-05,
+        "white_clipping_ratio": 0.000216
+      },
+      "restored_direct_metrics": {
+        "mae_255": 37.477989,
+        "psnr_db": 14.11232,
+        "luminance_ssim": 0.431478,
+        "gradient_correlation": 0.428858,
+        "delta_e_mean": 22.037628,
+        "delta_e_p95": 50.554085,
+        "luminance_bias": -0.027113,
+        "contrast_ratio": 0.699267,
+        "sharpness_ratio": 0.127042,
+        "spectral_peak_ratio": 19.193161,
+        "spectral_peak_excess_db": 0.333412,
+        "black_clipping_ratio": 7.2e-05,
+        "white_clipping_ratio": 0.000131
+      },
+      "geo_aligned_metrics": {
+        "mae_255": 37.065692,
+        "psnr_db": 14.223518,
+        "luminance_ssim": 0.442755,
+        "gradient_correlation": 0.448733,
+        "delta_e_mean": 21.835789,
+        "delta_e_p95": 50.032223,
+        "luminance_bias": -0.022213,
+        "contrast_ratio": 0.70003,
+        "sharpness_ratio": 0.117147,
+        "spectral_peak_ratio": 19.771868,
+        "spectral_peak_excess_db": 0.462424,
+        "black_clipping_ratio": 1.3e-05,
+        "white_clipping_ratio": 0.000217
+      },
+      "restored_aligned_metrics": {
+        "mae_255": 37.136437,
+        "psnr_db": 14.181166,
+        "luminance_ssim": 0.445806,
+        "gradient_correlation": 0.451363,
+        "delta_e_mean": 21.931005,
+        "delta_e_p95": 50.548218,
+        "luminance_bias": -0.027206,
+        "contrast_ratio": 0.699082,
+        "sharpness_ratio": 0.12725,
+        "spectral_peak_ratio": 19.20245,
+        "spectral_peak_excess_db": 0.335513,
+        "black_clipping_ratio": 6.7e-05,
+        "white_clipping_ratio": 0.00014
+      },
+      "geo_alignment": {
+        "feature_matches": 1617,
+        "inliers": 1275,
+        "inlier_ratio": 0.788497,
+        "median_reprojection_error_px": 1.184937,
+        "p95_reprojection_error_px": 2.49466,
+        "corners_photo": [
+          [
+            0.13500000536441803,
+            -0.3720000088214874
+          ],
+          [
+            1019.9530029296875,
+            -0.18799999356269836
+          ],
+          [
+            1020.0369873046875,
+            764.6090087890625
+          ],
+          [
+            0.31200000643730164,
+            764.739013671875
+          ]
+        ]
+      },
+      "restored_alignment": {
+        "feature_matches": 1647,
+        "inliers": 1295,
+        "inlier_ratio": 0.786278,
+        "median_reprojection_error_px": 1.17204,
+        "p95_reprojection_error_px": 2.497422,
+        "corners_photo": [
+          [
+            0.11699999868869781,
+            -0.3930000066757202
+          ],
+          [
+            1020.0330200195312,
+            -0.1120000034570694
+          ],
+          [
+            1020.0239868164062,
+            764.5390014648438
+          ],
+          [
+            0.1599999964237213,
+            764.760986328125
+          ]
+        ]
+      },
+      "output_dir": "/home/czc/gadget/output/v1"
+    },
+    {
+      "scene": "电脑屏幕",
+      "preset": "display",
+      "photo_size": [
+        1080,
+        1920
+      ],
+      "reference_size": [
+        1280,
+        1707
+      ],
+      "geo_output_size": [
+        936,
+        1248
+      ],
+      "restored_output_size": [
+        936,
+        1248
+      ],
+      "registration": {
+        "feature_matches": 1471,
+        "inliers": 1340,
+        "inlier_ratio": 0.910945,
+        "median_reprojection_error_px": 0.920858,
+        "p95_reprojection_error_px": 2.492584,
+        "corners_photo": [
+          [
+            143.49400329589844,
+            551.7509765625
+          ],
+          [
+            928.4600219726562,
+            611.2009887695312
+          ],
+          [
+            998.635009765625,
+            1736.208984375
+          ],
+          [
+            35.62300109863281,
+            1759.5689697265625
+          ]
+        ]
+      },
+      "geo_direct_metrics": {
+        "mae_255": 18.442934,
+        "psnr_db": 20.372344,
+        "luminance_ssim": 0.714964,
+        "gradient_correlation": 0.65412,
+        "delta_e_mean": 9.262564,
+        "delta_e_p95": 20.128592,
+        "luminance_bias": 0.061087,
+        "contrast_ratio": 0.99887,
+        "sharpness_ratio": 0.301781,
+        "spectral_peak_ratio": 8.265122,
+        "spectral_peak_excess_db": 0.235268,
+        "black_clipping_ratio": 4e-06,
+        "white_clipping_ratio": 3.6e-05
+      },
+      "restored_direct_metrics": {
+        "mae_255": 18.165807,
+        "psnr_db": 20.563615,
+        "luminance_ssim": 0.755137,
+        "gradient_correlation": 0.681402,
+        "delta_e_mean": 9.146149,
+        "delta_e_p95": 20.022411,
+        "luminance_bias": 0.059083,
+        "contrast_ratio": 0.986627,
+        "sharpness_ratio": 0.188689,
+        "spectral_peak_ratio": 9.233187,
+        "spectral_peak_excess_db": 0.716291,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.0
+      },
+      "geo_aligned_metrics": {
+        "mae_255": 18.211697,
+        "psnr_db": 20.536543,
+        "luminance_ssim": 0.72433,
+        "gradient_correlation": 0.680754,
+        "delta_e_mean": 9.177094,
+        "delta_e_p95": 19.856173,
+        "luminance_bias": 0.060763,
+        "contrast_ratio": 0.997814,
+        "sharpness_ratio": 0.314287,
+        "spectral_peak_ratio": 8.271669,
+        "spectral_peak_excess_db": 0.238706,
+        "black_clipping_ratio": 3e-06,
+        "white_clipping_ratio": 2.9e-05
+      },
+      "restored_aligned_metrics": {
+        "mae_255": 17.957631,
+        "psnr_db": 20.713286,
+        "luminance_ssim": 0.76305,
+        "gradient_correlation": 0.707544,
+        "delta_e_mean": 9.070355,
+        "delta_e_p95": 19.765205,
+        "luminance_bias": 0.058765,
+        "contrast_ratio": 0.985966,
+        "sharpness_ratio": 0.197075,
+        "spectral_peak_ratio": 9.227617,
+        "spectral_peak_excess_db": 0.71367,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.0
+      },
+      "geo_alignment": {
+        "feature_matches": 1784,
+        "inliers": 1666,
+        "inlier_ratio": 0.933857,
+        "median_reprojection_error_px": 0.872745,
+        "p95_reprojection_error_px": 2.234072,
+        "corners_photo": [
+          [
+            -0.35499998927116394,
+            -0.17299999296665192
+          ],
+          [
+            934.5800170898438,
+            -0.2630000114440918
+          ],
+          [
+            934.468017578125,
+            1247.02294921875
+          ],
+          [
+            0.14399999380111694,
+            1247.011962890625
+          ]
+        ]
+      },
+      "restored_alignment": {
+        "feature_matches": 1881,
+        "inliers": 1752,
+        "inlier_ratio": 0.931419,
+        "median_reprojection_error_px": 0.887413,
+        "p95_reprojection_error_px": 2.189836,
+        "corners_photo": [
+          [
+            -0.057999998331069946,
+            0.039000000804662704
+          ],
+          [
+            934.4559936523438,
+            -0.1120000034570694
+          ],
+          [
+            934.52001953125,
+            1247.16796875
+          ],
+          [
+            0.21299999952316284,
+            1246.9739990234375
+          ]
+        ]
+      },
+      "output_dir": "/home/czc/gadget/output/v1"
+    },
+    {
+      "scene": "红发女子",
+      "preset": "cinema",
+      "photo_size": [
+        1276,
+        958
+      ],
+      "reference_size": [
+        1672,
+        941
+      ],
+      "geo_output_size": [
+        1260,
+        709
+      ],
+      "restored_output_size": [
+        1260,
+        709
+      ],
+      "registration": {
+        "feature_matches": 256,
+        "inliers": 140,
+        "inlier_ratio": 0.546875,
+        "median_reprojection_error_px": 1.458928,
+        "p95_reprojection_error_px": 2.651197,
+        "corners_photo": [
+          [
+            25.97599983215332,
+            202.6540069580078
+          ],
+          [
+            1262.89404296875,
+            200.21099853515625
+          ],
+          [
+            1275.406982421875,
+            908.3460083007812
+          ],
+          [
+            14.045000076293945,
+            903.822998046875
+          ]
+        ]
+      },
+      "geo_direct_metrics": {
+        "mae_255": 45.856213,
+        "psnr_db": 12.900939,
+        "luminance_ssim": 0.544295,
+        "gradient_correlation": 0.381439,
+        "delta_e_mean": 21.772102,
+        "delta_e_p95": 52.241657,
+        "luminance_bias": 0.160805,
+        "contrast_ratio": 0.858069,
+        "sharpness_ratio": 0.281106,
+        "spectral_peak_ratio": 8.007936,
+        "spectral_peak_excess_db": 0.223851,
+        "black_clipping_ratio": 8.4e-05,
+        "white_clipping_ratio": 1.5e-05
+      },
+      "restored_direct_metrics": {
+        "mae_255": 41.876041,
+        "psnr_db": 13.426053,
+        "luminance_ssim": 0.562866,
+        "gradient_correlation": 0.386373,
+        "delta_e_mean": 19.934778,
+        "delta_e_p95": 51.216011,
+        "luminance_bias": 0.142703,
+        "contrast_ratio": 0.911205,
+        "sharpness_ratio": 0.331912,
+        "spectral_peak_ratio": 7.82412,
+        "spectral_peak_excess_db": 0.123001,
+        "black_clipping_ratio": 0.006713,
+        "white_clipping_ratio": 0.000112
+      },
+      "geo_aligned_metrics": {
+        "mae_255": 45.989799,
+        "psnr_db": 12.863157,
+        "luminance_ssim": 0.544399,
+        "gradient_correlation": 0.382863,
+        "delta_e_mean": 21.829628,
+        "delta_e_p95": 52.909103,
+        "luminance_bias": 0.162281,
+        "contrast_ratio": 0.855824,
+        "sharpness_ratio": 0.287738,
+        "spectral_peak_ratio": 8.029495,
+        "spectral_peak_excess_db": 0.235528,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 1.1e-05
+      },
+      "restored_aligned_metrics": {
+        "mae_255": 42.210662,
+        "psnr_db": 13.332757,
+        "luminance_ssim": 0.556011,
+        "gradient_correlation": 0.352031,
+        "delta_e_mean": 20.070496,
+        "delta_e_p95": 55.3214,
+        "luminance_bias": 0.140603,
+        "contrast_ratio": 0.915976,
+        "sharpness_ratio": 0.326012,
+        "spectral_peak_ratio": 7.87438,
+        "spectral_peak_excess_db": 0.150809,
+        "black_clipping_ratio": 0.009731,
+        "white_clipping_ratio": 0.000121
+      },
+      "geo_alignment": {
+        "feature_matches": 269,
+        "inliers": 163,
+        "inlier_ratio": 0.605948,
+        "median_reprojection_error_px": 1.597907,
+        "p95_reprojection_error_px": 2.750549,
+        "corners_photo": [
+          [
+            5.105999946594238,
+            2.615999937057495
+          ],
+          [
+            1257.842041015625,
+            1.190999984741211
+          ],
+          [
+            1262.467041015625,
+            710.0889892578125
+          ],
+          [
+            -0.8669999837875366,
+            707.9639892578125
+          ]
+        ]
+      },
+      "restored_alignment": {
+        "feature_matches": 253,
+        "inliers": 151,
+        "inlier_ratio": 0.596838,
+        "median_reprojection_error_px": 1.703178,
+        "p95_reprojection_error_px": 2.983779,
+        "corners_photo": [
+          [
+            -6.715000152587891,
+            -4.076000213623047
+          ],
+          [
+            1255.6639404296875,
+            3.325000047683716
+          ],
+          [
+            1255.9110107421875,
+            705.0809936523438
+          ],
+          [
+            -6.906000137329102,
+            711.0059814453125
+          ]
+        ]
+      },
+      "output_dir": "/home/czc/gadget/output/v1"
+    }
+  ]
+}

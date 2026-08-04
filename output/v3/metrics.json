@@ -1,0 +1,358 @@
+{
+  "version": "v3",
+  "scenes": 4,
+  "reports": [
+    {
+      "scene": "后台芭蕾",
+      "preset": "artwork",
+      "photo_size": [
+        1280,
+        1707
+      ],
+      "reference_size": [
+        1131,
+        1391
+      ],
+      "warp_output_size": [
+        1131,
+        1391
+      ],
+      "restored_output_size": [
+        1131,
+        1391
+      ],
+      "registration": {
+        "feature_matches": 329,
+        "inliers": 225,
+        "inlier_ratio": 0.683891,
+        "median_reprojection_error_px": 1.40763,
+        "p95_reprojection_error_px": 3.152311,
+        "corners_photo": [
+          [
+            250.58700561523438,
+            288.87701416015625
+          ],
+          [
+            1120.06396484375,
+            221.0469970703125
+          ],
+          [
+            1101.97998046875,
+            1316.9949951171875
+          ],
+          [
+            296.97900390625,
+            1458.7080078125
+          ]
+        ]
+      },
+      "warp_alignment": {
+        "ecc_score": 0.789641,
+        "ecc_method": "homography",
+        "dx_px": 75.3114,
+        "dy_px": 15.5008
+      },
+      "restored_alignment": {
+        "ecc_score": 0.783275,
+        "ecc_method": "homography",
+        "dx_px": 75.3571,
+        "dy_px": 15.4704
+      },
+      "direct_warp_metrics": {
+        "mae_255": 66.710064,
+        "psnr_db": 8.833647,
+        "luminance_ssim": 0.471749,
+        "gradient_correlation": 0.119885,
+        "delta_e_mean": 29.85113,
+        "delta_e_p95": 79.600143,
+        "luminance_bias": 0.227602,
+        "contrast_ratio": 1.16261,
+        "sharpness_ratio": 1.149543,
+        "spectral_peak_ratio": 8.365432,
+        "spectral_peak_excess_db": -1.041958,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.000121
+      },
+      "restored_metrics": {
+        "mae_255": 64.735933,
+        "psnr_db": 9.127229,
+        "luminance_ssim": 0.472023,
+        "gradient_correlation": 0.120439,
+        "delta_e_mean": 29.146404,
+        "delta_e_p95": 76.991203,
+        "luminance_bias": 0.217106,
+        "contrast_ratio": 1.110808,
+        "sharpness_ratio": 1.174418,
+        "spectral_peak_ratio": 8.322639,
+        "spectral_peak_excess_db": -1.064231,
+        "black_clipping_ratio": 1e-06,
+        "white_clipping_ratio": 1.7e-05
+      },
+      "output_dir": "/home/czc/gadget/output/v3"
+    },
+    {
+      "scene": "复古街头",
+      "preset": "glossy_artwork",
+      "photo_size": [
+        1702,
+        1276
+      ],
+      "reference_size": [
+        1448,
+        1086
+      ],
+      "warp_output_size": [
+        1448,
+        1086
+      ],
+      "restored_output_size": [
+        1448,
+        1086
+      ],
+      "registration": {
+        "feature_matches": 1327,
+        "inliers": 1093,
+        "inlier_ratio": 0.823662,
+        "median_reprojection_error_px": 1.160106,
+        "p95_reprojection_error_px": 2.688263,
+        "corners_photo": [
+          [
+            200.78500366210938,
+            357.45599365234375
+          ],
+          [
+            1172.2080078125,
+            294.24798583984375
+          ],
+          [
+            1304.156982421875,
+            957.64599609375
+          ],
+          [
+            325.97698974609375,
+            1134.112060546875
+          ]
+        ]
+      },
+      "warp_alignment": {
+        "ecc_score": 0.821518,
+        "ecc_method": "homography",
+        "dx_px": 0.9953,
+        "dy_px": 1.7229
+      },
+      "restored_alignment": {
+        "ecc_score": 0.821528,
+        "ecc_method": "homography",
+        "dx_px": 1.0244,
+        "dy_px": 1.6705
+      },
+      "direct_warp_metrics": {
+        "mae_255": 39.413913,
+        "psnr_db": 13.679676,
+        "luminance_ssim": 0.391687,
+        "gradient_correlation": 0.387438,
+        "delta_e_mean": 22.87899,
+        "delta_e_p95": 53.821705,
+        "luminance_bias": -0.021365,
+        "contrast_ratio": 0.702203,
+        "sharpness_ratio": 0.126397,
+        "spectral_peak_ratio": 19.400137,
+        "spectral_peak_excess_db": 0.379995,
+        "black_clipping_ratio": 1.4e-05,
+        "white_clipping_ratio": 0.000228
+      },
+      "restored_metrics": {
+        "mae_255": 39.718752,
+        "psnr_db": 13.613644,
+        "luminance_ssim": 0.393721,
+        "gradient_correlation": 0.389241,
+        "delta_e_mean": 23.054409,
+        "delta_e_p95": 54.380981,
+        "luminance_bias": -0.028864,
+        "contrast_ratio": 0.695504,
+        "sharpness_ratio": 0.134578,
+        "spectral_peak_ratio": 19.229567,
+        "spectral_peak_excess_db": 0.341642,
+        "black_clipping_ratio": 6.4e-05,
+        "white_clipping_ratio": 6e-05
+      },
+      "output_dir": "/home/czc/gadget/output/v3"
+    },
+    {
+      "scene": "电脑屏幕",
+      "preset": "display",
+      "photo_size": [
+        1080,
+        1920
+      ],
+      "reference_size": [
+        1280,
+        1707
+      ],
+      "warp_output_size": [
+        1280,
+        1707
+      ],
+      "restored_output_size": [
+        1280,
+        1707
+      ],
+      "registration": {
+        "feature_matches": 1471,
+        "inliers": 1340,
+        "inlier_ratio": 0.910945,
+        "median_reprojection_error_px": 0.920858,
+        "p95_reprojection_error_px": 2.492584,
+        "corners_photo": [
+          [
+            143.49400329589844,
+            551.7509765625
+          ],
+          [
+            928.4600219726562,
+            611.2009887695312
+          ],
+          [
+            998.635009765625,
+            1736.208984375
+          ],
+          [
+            35.62300109863281,
+            1759.5689697265625
+          ]
+        ]
+      },
+      "warp_alignment": {
+        "ecc_score": 0.967922,
+        "ecc_method": "homography",
+        "dx_px": -0.0391,
+        "dy_px": 1.0745
+      },
+      "restored_alignment": {
+        "ecc_score": 0.96852,
+        "ecc_method": "homography",
+        "dx_px": -0.0087,
+        "dy_px": 1.1158
+      },
+      "direct_warp_metrics": {
+        "mae_255": 18.998374,
+        "psnr_db": 19.97314,
+        "luminance_ssim": 0.692741,
+        "gradient_correlation": 0.604837,
+        "delta_e_mean": 9.474995,
+        "delta_e_p95": 20.853746,
+        "luminance_bias": 0.061589,
+        "contrast_ratio": 0.99995,
+        "sharpness_ratio": 0.280785,
+        "spectral_peak_ratio": 8.28953,
+        "spectral_peak_excess_db": 0.248074,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 3.8e-05
+      },
+      "restored_metrics": {
+        "mae_255": 18.36036,
+        "psnr_db": 20.264762,
+        "luminance_ssim": 0.730678,
+        "gradient_correlation": 0.623869,
+        "delta_e_mean": 9.258439,
+        "delta_e_p95": 20.503834,
+        "luminance_bias": 0.057498,
+        "contrast_ratio": 0.989325,
+        "sharpness_ratio": 0.189263,
+        "spectral_peak_ratio": 8.938046,
+        "spectral_peak_excess_db": 0.575201,
+        "black_clipping_ratio": 0.0,
+        "white_clipping_ratio": 0.0
+      },
+      "output_dir": "/home/czc/gadget/output/v3"
+    },
+    {
+      "scene": "红发女子",
+      "preset": "cinema",
+      "photo_size": [
+        1276,
+        958
+      ],
+      "reference_size": [
+        1672,
+        941
+      ],
+      "warp_output_size": [
+        1672,
+        941
+      ],
+      "restored_output_size": [
+        1672,
+        941
+      ],
+      "registration": {
+        "feature_matches": 256,
+        "inliers": 140,
+        "inlier_ratio": 0.546875,
+        "median_reprojection_error_px": 1.458928,
+        "p95_reprojection_error_px": 2.651197,
+        "corners_photo": [
+          [
+            25.97599983215332,
+            202.6540069580078
+          ],
+          [
+            1262.89404296875,
+            200.21099853515625
+          ],
+          [
+            1275.406982421875,
+            908.3460083007812
+          ],
+          [
+            14.045000076293945,
+            903.822998046875
+          ]
+        ]
+      },
+      "warp_alignment": {
+        "ecc_score": 0.890812,
+        "ecc_method": "homography",
+        "dx_px": 12.7174,
+        "dy_px": -49.1702
+      },
+      "restored_alignment": {
+        "ecc_score": 0.890738,
+        "ecc_method": "homography",
+        "dx_px": 12.7905,
+        "dy_px": -48.9043
+      },
+      "direct_warp_metrics": {
+        "mae_255": 55.609579,
+        "psnr_db": 11.075087,
+        "luminance_ssim": 0.488753,
+        "gradient_correlation": 0.276609,
+        "delta_e_mean": 25.94084,
+        "delta_e_p95": 69.636421,
+        "luminance_bias": 0.189349,
+        "contrast_ratio": 0.810535,
+        "sharpness_ratio": 0.289066,
+        "spectral_peak_ratio": 8.297117,
+        "spectral_peak_excess_db": 0.377918,
+        "black_clipping_ratio": 1.7e-05,
+        "white_clipping_ratio": 1.3e-05
+      },
+      "restored_metrics": {
+        "mae_255": 52.129863,
+        "psnr_db": 11.421119,
+        "luminance_ssim": 0.494986,
+        "gradient_correlation": 0.276308,
+        "delta_e_mean": 24.331135,
+        "delta_e_p95": 68.901566,
+        "luminance_bias": 0.171563,
+        "contrast_ratio": 0.862348,
+        "sharpness_ratio": 0.345229,
+        "spectral_peak_ratio": 8.18999,
+        "spectral_peak_excess_db": 0.321479,
+        "black_clipping_ratio": 0.004175,
+        "white_clipping_ratio": 7.8e-05
+      },
+      "output_dir": "/home/czc/gadget/output/v3"
+    }
+  ]
+}
