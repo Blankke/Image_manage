@@ -18,6 +18,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      # PySide6 在导入 QtGui/QtWidgets 时需要 Ubuntu 提供 EGL/OpenGL 动态库。
+      # Windows runner 自带对应组件，因此只在 Linux 安装，保持矩阵行为一致。
+      - name: 安装 Qt 图形运行时依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1 libgl1
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest
         env:
