@@ -1,23 +1,26 @@
 # 参考项目清单
 
-核查日期：2026-08-01。许可证以仓库顶层 `LICENSE`、官方发布页和本地浅克隆为
+核查日期：2026-08-23。许可证以仓库顶层 `LICENSE`、官方发布页和本地浅克隆为
 依据。用户明确声明其拥有所列论文源码及权重并授权当前论文项目直接利用；项目仍
 逐项保留公开许可证、文件来源和修改记录。没有公开许可证且本轮没有必要复制的项目
 继续只作思想参考，避免未来分发时权利边界不清。
 
 本轮实际检出的关键 commit：fast-reflection-removal `1f987741`、DDA `bae419bf`、
 MCNN `468b2677`、UnDeM `73cb9406`、NAFNet `2b4af71e`、Real-ESRGAN
-`a4abfb29`、Real-ESRGAN-ncnn-vulkan `37026f49`、BIPNet `661fb9ee`。
+`a4abfb29`、Real-ESRGAN-ncnn-vulkan `37026f49`、BIPNet `661fb9ee`、DocAligner
+`3275b0f0`。
 
 | 项目 | 参考方向 | 核查到的许可证 | ScreenRestore 使用方式 |
 | --- | --- | --- | --- |
 | [OpenCV-Document-Scanner](https://github.com/andrewdcampbell/OpenCV-Document-Scanner) | 四边形检测、拖点交互 | 未发现明确许可证 | 仅理解思路，禁止复制代码 |
+| [DocAligner](https://github.com/DocsaidLab/DocAligner) | 角点热图、边缘和存在性监督的文档四角基线 | Apache-2.0 | 通过独立 PyPI 依赖运行未修改上游模型；不复制源码或权重。LCNet100 在四场景完整四角 0/4，FastViT-SA24 为 2/4，后者已检出样本平均 NCE 2.95%、IoU 0.8849；无语义 boundary 的纯梯度精修为 3.18%/0.8775。模型不具备 content/outer 层级和产品接受置信度 |
 | [makeacopy](https://github.com/egdels/makeacopy) | 离线扫描产品结构 | 顶层 LICENSE 仅声明所含 OpenCV 文件为 Apache-2.0，项目整体授权不清晰 | 仅理解思路，禁止复制代码 |
 | [OpenCV](https://github.com/opencv/opencv) | 轮廓、透视、滤波、色彩转换 | Apache-2.0 | 通过 PyPI 二进制依赖调用公开 API，不复制源码 |
 | [HandyView](https://github.com/xinntao/HandyView) | 图片查看、缩放与比较交互 | MIT | 仅研究交互，不复制代码 |
 | [fast-reflection-removal](https://github.com/JanPalasek/fast-reflection-removal) | 去反光插件方向 | MIT | 已移植梯度/DCT Poisson 核心并做数值、取消和依赖改造；所有 Fidelity 预设默认关闭，始终标为实验性 |
 | [Awesome-Demoireing](https://github.com/rebeccaeexu/Awesome-Demoireing) | 去摩尔纹论文索引 | MIT | 仅作研究索引，不复制实现 |
 | [ESDNet / UHDM](https://github.com/CVMI-Lab/UHDM) | 4K 屏幕照片去摩尔纹候选 | 代码仓库 Apache-2.0；权重分发条款仍需独立核查 | 代码许可明确，但尚未通过 CPU/ONNX 和 8 组配对筛选；暂不复制结构或分发权重 |
+| [Moiré Zero / MZNet](https://github.com/sngryongLee/Moire-Zero) | 高分辨率高效去摩尔纹候选 | 核查时仓库未提供顶层许可证 | 仅记录论文与部署候选；禁止复制代码、配置或权重，等待上游明确授权 |
 | [CLEAR](https://github.com/libozhu03/CLEAR) | 联合去闪烁条带与摩尔纹 | 当前仓库仅项目页，未发现代码/权重许可证 | 仅研究论文和数据设计，禁止复制或宣称已接入 |
 | [RIFLE](https://github.com/libozhu03/RIFLE) | 扩散式闪烁条带去除 | 安装、权重与推理仍为 TBD，未发现仓库许可证 | 仅研究退化模拟与掩膜评估，不进入 CPU 默认路径 |
 | [BRACE](https://github.com/ZZH-qwq/BRACE) | 多曝光 RAW 条带恢复 | 安装、数据、权重与推理仍为 TODO，未发现仓库许可证 | 仅作为未来多曝光 RAW 协议参考 |

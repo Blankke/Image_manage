@@ -110,9 +110,17 @@ class ScreenRestoreRequestHandler(BaseHTTPRequestHandler):
                 lens = settings.get("lens")
                 if lens is not None and not isinstance(lens, dict):
                     raise ValueError("lens 必须是 JSON 对象")
+                target_scene = settings.get("preset")
+                if target_scene is not None and not isinstance(target_scene, str):
+                    raise ValueError("preset 必须是字符串")
                 self._send_json(
                     HTTPStatus.OK,
-                    self.server.restore_service.detect(images[0], lens, include_preview=True),
+                    self.server.restore_service.detect(
+                        images[0],
+                        lens,
+                        target_scene=target_scene,
+                        include_preview=True,
+                    ),
                 )
             elif path.endswith("calibrate"):
                 self._send_json(

@@ -7,8 +7,39 @@ SceneContext 是 SemanticAnalyzer 的输出，供 RestorationPlanner
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+
+
+@dataclass
+class LocalizationCandidate:
+    """单个定位候选四边形。
+
+    Attributes:
+        polygon: 四边形顶点 N×2，像素坐标 (float32)
+        source: 候选来源标识 ("contour", "line", "profile", ...)
+        runtime_score: 运行时评分 [0,1]（不含 GT 信息）
+        geometry_score: 几何评分分量
+        semantic_score: 语义评分分量（可选）
+    """
+
+    polygon: np.ndarray
+    source: str = "contour"
+    runtime_score: float = 0.0
+    geometry_score: float = 0.0
+    semantic_score: float = 0.0
+    layer: str = "content"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "polygon": self.polygon.astype(float).tolist(),
+            "source": self.source,
+            "runtime_score": round(self.runtime_score, 6),
+            "geometry_score": round(self.geometry_score, 6),
+            "semantic_score": round(self.semantic_score, 6),
+            "layer": self.layer,
+        }
 
 
 @dataclass
@@ -51,6 +82,17 @@ class SceneContext:
     target_mask: np.ndarray | None = None
     target_bbox: tuple[int, int, int, int] | None = None
     target_polygon: np.ndarray | None = None
+    outer_polygon: np.ndarray | None = None
+
+    localization_status: str = "not_run"
+    localization_confidence: float = 0.0
+    localization_backend: str = ""
+    localization_rejection_reasons: tuple[str, ...] = ()
+    aspect_ratio: float | None = None
+    aspect_confidence: float = 0.0
+
+    # v11: 所有定位候选（含未选中者），用于诊断 generation vs ranking 失败
+    localization_candidates: list[LocalizationCandidate] = field(default_factory=list)
 
     semantic_masks: dict[str, np.ndarray] = field(default_factory=dict)
     artifact_masks: dict[str, np.ndarray] = field(default_factory=dict)
@@ -87,6 +129,18 @@ class SceneContext:
             "scene_confidence": round(self.scene_confidence, 4),
             "has_target": self.has_target(),
             "target_bbox": list(self.target_bbox) if self.target_bbox else None,
+            "localization": {
+                "status": self.localization_status,
+                "confidence": round(self.localization_confidence, 4),
+                "backend": self.localization_backend,
+                "rejection_reasons": list(self.localization_rejection_reasons),
+                "candidate_count": len(self.localization_candidates),
+                "has_outer_polygon": self.outer_polygon is not None,
+                "aspect_ratio": (
+                    round(self.aspect_ratio, 6) if self.aspect_ratio is not None else None
+                ),
+                "aspect_confidence": round(self.aspect_confidence, 4),
+            },
             "semantic_labels": list(self.semantic_masks.keys()),
             "artifact_labels": list(self.artifact_masks.keys()),
             "properties": {k: round(v, 4) if isinstance(v, float) else v

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://screenrestore.local/schemas/geometry.schema.json",
+  "title": "ScreenRestore QuadLocator geometry sample",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "split",
+    "group_id",
+    "capture_session",
+    "device",
+    "present",
+    "target_class",
+    "content_quad",
+    "outer_quad",
+    "visible",
+    "occlusion",
+    "glare_level"
+  ],
+  "properties": {
+    "image": {"type": "string", "minLength": 1},
+    "split": {"enum": ["train", "validation", "test"]},
+    "group_id": {"type": "string", "minLength": 1},
+    "capture_session": {"type": "string", "minLength": 1},
+    "device": {"type": "string", "minLength": 1},
+    "present": {"type": "boolean"},
+    "target_class": {"enum": ["artwork", "postcard", "screen", "none"]},
+    "content_quad": {"$ref": "#/$defs/nullable_quad"},
+    "outer_quad": {"$ref": "#/$defs/nullable_quad"},
+    "visible": {"type": "boolean"},
+    "occlusion": {"type": "number", "minimum": 0, "maximum": 1},
+    "glare_level": {"enum": ["none", "light", "medium", "strong"]}
+  },
+  "$defs": {
+    "point": {
+      "type": "array",
+      "prefixItems": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "number", "minimum": 0, "maximum": 1}
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "quad": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/point"},
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "nullable_quad": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/quad"}]
+    }
+  }
+}

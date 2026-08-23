@@ -23,6 +23,18 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 
 可选 `onnxruntime` 通常为 MIT；OpenVINO 为 Apache-2.0。它们默认不安装、不导入，也不随核心包分发。真正分发可选运行时或模型前必须对选定版本和权重另行核查。
 
+## 独立研究基准依赖
+
+### DocAligner
+
+- 来源：https://github.com/DocsaidLab/DocAligner
+- 核查版本：commit `3275b0f07f8e99d8c01cb0774dea2549be1416b6`。
+- 许可证：Apache-2.0。
+- 本项目入口：`benchmarks/geometry_e2e/docaligner_baseline.py` 与独立依赖清单。
+- 使用方式：从 PyPI 安装未修改的 `docaligner-docsaid==1.1.1`，在用户主动运行基准时由上游下载权重；核心包不依赖、不复制、不分发其代码、字体或权重。
+- 本项目额外适配：由于上游通用工具在导入时要求系统 `libturbojpeg`，基准入口在该动态库缺失时提供独立编写的 OpenCV JPEG 接口替代。模型接收已解码数组，该替代不参与推理计算。
+- 权重说明：本机验证使用了上游 LCNet100 与 FastViT-SA24 ONNX 权重。代码仓库许可证已经核查；任何正式再分发权重的行为仍需单独确认权重授权范围。
+
 ## OpenCV
 
 - 项目：https://github.com/opencv/opencv
@@ -81,7 +93,7 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 ## 研究参考
 
 用户指定的完整参考项目、许可证核查、实际移植范围和未采用原因见
-`docs/REFERENCE_PROJECTS.md`；针对 CLEAR、RIFLE、BRACE、BinaryDemoire、ESDNet
+`docs/REFERENCE_PROJECTS.md`；针对 CLEAR、RIFLE、BRACE、BinaryDemoire、ESDNet、Moiré Zero
 等屏摄候选的代码/权重状态见 `docs/SCREEN_AI_RESEARCH.md`。除上面逐文件列出的三项
 移植外，其余参考仓库未复制源码、权重、素材或二进制。
 

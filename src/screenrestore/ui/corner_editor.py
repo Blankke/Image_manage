@@ -10,7 +10,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QKeyEvent, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem, QGraphicsPolygonItem, QLabel
 
-from screenrestore.operators.geometry import order_corners
+from screenrestore.geometry import order_corners
 
 from .image_canvas import ImageCanvas, rgb_to_qimage
 

@@ -1,0 +1,10 @@
+{
+  "accepted_precision_min": 0.99,
+  "in_scope_coverage_min": 0.9,
+  "wrong_layer_rate_max": 0.005,
+  "corner_nce_p95_max": 0.01,
+  "quad_iou_median_min": 0.97,
+  "quad_iou_p05_min": 0.93,
+  "minimum_release_samples": 100,
+  "split_policy": "group_id + capture_session + artwork_identity"
+}

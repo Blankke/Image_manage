@@ -4,13 +4,14 @@
 RestorationPlanner 和下游算子消费。不依赖 Qt。
 """
 
-from .context import SceneContext
 from .analyzer import SemanticAnalyzer
+from .context import LocalizationCandidate, SceneContext
+from .planner import RestorationPlan, RestorationPlanner
 from .scene_classifier import SceneClassifier, classify_scene
-from .planner import RestorationPlanner, RestorationPlan
 
 __all__ = [
     "SceneContext",
+    "LocalizationCandidate",
     "SemanticAnalyzer",
     "SceneClassifier",
     "classify_scene",

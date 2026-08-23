@@ -35,6 +35,7 @@ from screenrestore.core.presets import (
     build_default_pipeline,
     build_registry,
 )
+from screenrestore.geometry import AutomaticGeometryService, target_class_for_scene
 from screenrestore.io.image_loader import ImageLoadError, load_image
 from screenrestore.io.project_file import (
     PROJECT_SUFFIX,
@@ -44,7 +45,7 @@ from screenrestore.io.project_file import (
     save_project,
     verify_project_source,
 )
-from screenrestore.operators.geometry import detect_quadrilaterals
+from screenrestore.operators.lens_distortion import undistort_lens
 
 from .compare_view import CompareView
 from .diagnostics_dialog import DiagnosticsDialog
@@ -68,6 +69,7 @@ class MainWindow(QMainWindow):
         self.pipeline = build_default_pipeline(self.registry)
         self.history = PipelineHistory(self.pipeline, self.registry)
         self.current_preset = PresetId.DISPLAY
+        self.geometry_service = AutomaticGeometryService()
         self._thread_pool = QThreadPool.globalInstance()
         self._token: CancellationToken | None = None
         self._worker: PipelineWorker | None = None
@@ -518,15 +520,22 @@ class MainWindow(QMainWindow):
 
         if self.document is None:
             return
-        proxy = self.document.proxy()
-        candidates = detect_quadrilaterals(proxy)
-        if not candidates:
-            self.statusBar().showMessage("未检测到可靠四边形，可进入四角编辑手动调整", 5000)
+        proxy = self._geometry_input_proxy()
+        self.compare_view.set_corner_source(proxy)
+        decision = self.geometry_service.localize(
+            proxy,
+            target_class_for_scene(self.current_preset.value),
+        )
+        if not decision.accepted or decision.proposed_corners is None:
+            reasons = "、".join(reason.value for reason in decision.rejection_reasons)
+            self.statusBar().showMessage(f"自动定位拒绝继续：{reasons}", 5000)
             self.toggle_corner_editing(force=True)
             return
-        self.compare_view.editor.set_corners(candidates[0].corners, emit=True)
+        self.compare_view.editor.set_image(proxy, fit=False)
+        self.compare_view.editor.set_corners(decision.proposed_corners, emit=True)
         self.statusBar().showMessage(
-            f"检测到 {len(candidates)} 个候选，已采用置信度 {candidates[0].confidence:.0%} 的候选",
+            f"内容边界已接受：置信度 {decision.confidence:.0%}，"
+            f"画幅 {decision.aspect.ratio:.3f}（{decision.aspect.confidence:.0%}）",
             5000,
         )
 
@@ -537,16 +546,30 @@ class MainWindow(QMainWindow):
             return
         enabled = (not self._corner_editing) if force is None else force
         self._corner_editing = enabled
+        if enabled:
+            self.compare_view.set_corner_source(self._geometry_input_proxy())
         self.compare_view.set_corner_editing(enabled)
         if enabled:
             params = self.pipeline.state("geometry").params.to_dict()
             normalized = np.asarray(params["corners"], dtype=np.float32)
-            proxy = self.document.proxy()
+            proxy = self._geometry_input_proxy()
             corners = normalized * np.array([proxy.shape[1] - 1, proxy.shape[0] - 1])
             self.compare_view.editor.set_corners(corners)
             self.statusBar().showMessage("四角编辑模式：拖动控制点，方向键微调，Shift 为 10 像素")
         else:
             self.schedule_preview()
+
+    def _geometry_input_proxy(self) -> np.ndarray:
+        """返回与流水线 geometry 节点坐标系一致的代理图。"""
+
+        if self.document is None:
+            raise RuntimeError("尚未加载图像")
+        proxy = self.document.proxy()
+        lens_state = self.pipeline.state("lens_distortion")
+        if not lens_state.enabled:
+            return proxy
+        corrected, _metadata = undistort_lens(proxy, lens_state.params)
+        return corrected
 
     def reset_corners(self) -> None:
         """重置四角为完整代理图边界。"""
@@ -638,7 +661,7 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return
         values = np.asarray(corners, dtype=np.float32)
-        proxy = self.document.proxy()
+        proxy = self._geometry_input_proxy()
         normalized = values / np.array([proxy.shape[1] - 1, proxy.shape[0] - 1])
         params = self.pipeline.state("geometry").params.to_dict()
         params["corners"] = np.clip(normalized, 0.0, 1.0).tolist()

@@ -386,12 +386,15 @@ async function autoDetect() {
   setBusy(true, "正在分析屏幕边界");
   const form = new FormData();
   form.append("files", state.files[0], state.files[0].name);
-  form.append("settings", JSON.stringify({ lens: lensSettings() }));
+  form.append("settings", JSON.stringify({ lens: lensSettings(), preset: byId("preset").value }));
   try {
     const response = await fetch("/api/v1/detect", { method: "POST", body: form });
     if (!response.ok) throw new Error(await apiError(response));
     const payload = await response.json();
-    if (!payload.candidates.length) throw new Error("未检测到可靠四边形，请手动拖动四角");
+    if (!payload.localization?.accepted) {
+      const reasons = payload.localization?.rejection_reasons?.join(", ") || "no_candidate";
+      throw new Error(`自动定位拒绝继续：${reasons}`);
+    }
     if (payload.corrected_preview?.data_url) {
       const corrected = new Image();
       await new Promise((resolve, reject) => {
@@ -401,10 +404,12 @@ async function autoDetect() {
     } else {
       state.geometryImage = null;
     }
-    state.corners = payload.candidates[0].corners;
+    state.corners = payload.localization.corners;
     changeMode("corners");
     drawCanvas();
-    setStatus(`四角检测完成，置信度 ${(payload.candidates[0].confidence * 100).toFixed(1)}%`, "ready", 100);
+    const aspect = payload.localization.aspect;
+    const aspectText = aspect ? ` · 比例 ${aspect.ratio.toFixed(3)} (${(aspect.confidence * 100).toFixed(0)}%)` : "";
+    setStatus(`内容边界已接受，置信度 ${(payload.localization.confidence * 100).toFixed(1)}%${aspectText}`, "ready", 100);
   } catch (error) { setStatus(error.message, "", 0); }
   finally { setBusy(false, ""); }
 }

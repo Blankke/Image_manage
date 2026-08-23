@@ -11,6 +11,7 @@
 | [RIFLE](https://arxiv.org/abs/2509.24644) | 潜空间扩散去闪烁条带，提供条带先验和真实配对评估思路 | [官方仓库](https://github.com/libozhu03/RIFLE) 的安装、权重、推理仍为 TBD | 扩散模型不适合作为默认 CPU 路径；且代码/权重尚不可用，仅研究其合成退化和掩膜评估 |
 | [BRACE](https://arxiv.org/abs/2606.29845) | 多曝光 RAW 融合去闪烁条带，物理假设比单帧推断更可靠 | [官方仓库](https://github.com/ZZH-qwq/BRACE) 当前安装、数据、权重和推理仍为 TODO | 未发现明确许可证；保留为未来 RAW 包围曝光输入协议参考，不复制代码 |
 | [BinaryDemoire](https://arxiv.org/abs/2602.03176) | 1-bit 权重/激活的轻量去摩尔纹，理论上适合 CPU | [官方仓库](https://github.com/zhengchen1999/BinaryDemoire) 当前 TODO 仍是发布代码与预训练模型 | 仓库无许可证且没有代码/权重；不能接入，继续监测发布状态 |
+| [Moiré Zero / MZNet](https://github.com/sngryongLee/Moire-Zero) | 面向高分辨率图像的多尺度高效去摩尔纹候选，提供 Small/Medium 配置 | 官方仓库已发布代码与 checkpoint，但截至 2026-08-23 未见顶层许可证 | 进入 Mac mini 模型选型清单；许可证明确前只运行隔离研究，不复制、改写或分发代码和权重 |
 | [ESDNet/UHDM](https://arxiv.org/abs/2207.09935) | 面向 4K、多尺度摩尔纹；比通用去模糊模型更贴合屏幕照片 | [官方代码](https://github.com/CVMI-Lab/UHDM) 已公开，代码仓库为 Apache-2.0 | 候选优先级最高；权重分发条款、CPU 内存、ONNX 动态尺寸和 8 组实拍收益仍须逐项验收后才能成为插件 |
 | NAFNet GoPro width32 | 通用同分辨率去模糊 | 本地已有官方权重和可选 PyTorch/ONNX 导出路径 | 合成屏幕筛选出现明显干净内容漂移，运动/失焦 PSNR 均未改善；维持实验 restoration，不默认启用 |
 | Real-ESRGAN general-x4v3 | 感知恢复与超分 | 本地已有官方强/弱权重和 CPU tile 插件 | 只作为 enhancement；8 组基准需与 Fidelity 并列，不能覆盖或冒充原始数字帧 |

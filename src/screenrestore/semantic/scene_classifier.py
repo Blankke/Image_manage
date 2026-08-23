@@ -51,7 +51,6 @@ class SceneClassifier:
     def _classify_with_model(self, image_rgb: np.ndarray) -> tuple[str, float]:
         """使用 ONNX 模型分类（如 CLIP）。"""
         from screenrestore.core.operator import ProcessingContext
-        from screenrestore.inference.backend import AnalysisResult
 
         result = self._backend.run_analysis(image_rgb, ProcessingContext(preview=True))
         top_label, confidence = result.top_label()
@@ -96,26 +95,17 @@ def _classify_heuristic(image_rgb: np.ndarray) -> tuple[str, float]:
     import cv2
 
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
-    h, w = gray.shape[:2]
-    total_pixels = h * w
 
     # 特征 1: 高亮+低饱和区域占比 → 反光概率
     hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
     v = hsv[:, :, 2] / 255.0
     s = hsv[:, :, 1] / 255.0
     highlight_low_sat = float(np.mean((v > 0.85) & (s < 0.2)))
-    highlight_very_bright = float(np.mean(v > 0.95))
 
     # 特征 2: 暗区占比 → 电影院/投影概率
     dark_ratio = float(np.mean(v < 0.1))
 
-    # 特征 3: 梯度特征
-    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-    avg_gradient = float(grad_mag.mean())
-
-    # 特征 4: FFT 高频周期性
+    # 特征 3: FFT 高频周期性
     fft = np.fft.fft2(gray.astype(np.float32) / 255.0)
     fft_mag = np.abs(np.fft.fftshift(fft))
     center_y, center_x = fft_mag.shape[0] // 2, fft_mag.shape[1] // 2

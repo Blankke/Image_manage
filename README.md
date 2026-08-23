@@ -1,6 +1,6 @@
 # ScreenRestore
 
-ScreenRestore 是一款完全离线的屏幕照片恢复工具，用于处理手机斜拍显示器、电子海报、投影幕布、电影院银幕、LED 大屏及普通文档/PPT。它以平面透视恢复为起点，继续处理条带、摩尔纹、噪声、色偏、曝光和局部对比度，默认保留彩色内容、渐变、暗部与电影光影。
+ScreenRestore 是一款完全离线的平面图像电子化恢复工具，用于处理手机斜拍画作、明信片、显示器、电子海报、投影幕布、电影院银幕及 LED 大屏。它以可拒绝的内容层定位和平面透视恢复为起点，继续处理光度偏差、条带、摩尔纹、噪声和反光，并区分观测恢复与生成增强。
 
 应用不会上传图片，不包含遥测，不调用云端 API。没有独立显卡、模型文件、PyTorch 或 CUDA 时，经典 CPU 流水线仍可完整启动和运行。
 
@@ -8,7 +8,7 @@ ScreenRestore 是一款完全离线的屏幕照片恢复工具，用于处理手
 
 - PNG、JPEG、WebP、BMP、TIFF；EXIF Orientation；中文路径；最长边 1600 像素代理预览。
 - 同源本地 Web 前后端：多图拖放、四角与 Mesh 拖动、镜头标定、Geometry / Fidelity / AI Enhanced 三路输出、拖动分割比较、结果下载和 JSON 诊断；默认只监听 `127.0.0.1`，上传图片只驻留请求内存。
-- 自动四边形候选评分；贴边银幕的稳健直线细化；四角拖动、覆盖层、局部放大镜、边界约束、键盘微调、重置与重新检测。
+- CLI、Web、GUI 共用 `AutomaticGeometryService`：可选 QuadLocator ONNX 负责 content/outer 语义，原分辨率直线精修负责像素落点，统一置信度策略负责接受或拒绝。无训练模型时的经典候选仅作保守 fallback 和诊断。
 - 针孔/鱼眼镜头畸变校正；5 张以上不同姿态棋盘格的多视角标定；归一化内参可跨同镜头分辨率复用。
 - 2～15 行列可编辑控制网格、二维样条逆映射和弯曲银幕校正；透视与非线性形变分别建模。
 - 2～20 张多帧对齐，支持平移/仿射/单应模型；按裁切、反光、时域离群和局部清晰度融合真实观测，并单独报告“其他帧补回”和“所有帧仍未解决”的比例。
@@ -44,7 +44,7 @@ screenrestore-web --host 127.0.0.1 --port 8765 --open
 
 1. 拖入一张照片，或同一静态内容的 2～8 张连拍。
 2. 若有镜头参数则先启用；也可上传至少 5 张不同角度的棋盘格照片现场标定。
-3. 自动检测或拖动四角。镜头启用时，自动检测会同时生成去畸变代理图，四角坐标对应校正后画面。
+3. 自动定位内容层或拖动四角。自动结果包含接受状态、置信度、拒绝原因和画幅估计；低置信度不会静默导出。镜头启用时，定位基于去畸变代理图，四角坐标对应校正后画面。
 4. 对弯曲银幕启用 Mesh，生成对称起点后拖动控制点；网格作用于透视恢复后的画面。
 5. 默认使用验证过的自适应去摩尔纹；规则栅格仍明显时可选“增强去纹”。高光光晕可按
    场景预设、证据门控、增强抑制或关闭，电影原片已有的轮廓光默认保留。
@@ -87,9 +87,12 @@ screenrestore-gui "D:\照片\倾斜屏幕.jpg"
 screenrestore "D:\照片\输入.jpg" `
   --preset display `
   --corners auto `
+  --quad-model "D:\模型\quadlocator-s.onnx" `
   --output "D:\照片\输出.png" `
   --json-diagnostics
 ```
+
+`--corners auto` 采用失败关闭策略。缺少语义模型时，经典检测器只返回诊断候选，并因无法证明 content/outer 层级而拒绝无人值守继续；拒绝会返回原因，不会改用整幅图片冒充内容边界。
 
 显式四角可使用像素或 `[0,1]` 归一化坐标，顺序会自动规范化：
 
@@ -101,6 +104,40 @@ screenrestore input.jpg --corners 120,80 1810,65 1880,1010 90,1040 -o output.tif
 
 ```powershell
 screenrestore --project work.screenrestore.json --output output.webp --quality 94
+```
+
+## QuadLocator 数据、训练与端到端几何基准
+
+训练栈与产品依赖隔离。下面的程序合成器不读取网络素材，可用于验证嵌套画框、卡纸、画芯和屏幕边框的完整训练契约：
+
+```bash
+source .venv/bin/activate
+which python
+python -m pip install -r training/requirements.txt
+python -m training.quadlocator.generate_synthetic --output-directory /tmp/quad-synth --count 200
+python -m training.quadlocator.train --manifest /tmp/quad-synth/manifest.jsonl --output-directory /tmp/quad-run --epochs 2
+python -m training.quadlocator.export_onnx --checkpoint /tmp/quad-run/best.pt --output /tmp/quadlocator-s.onnx
+```
+
+真实数据清单遵循 `datasets/schemas/geometry.schema.json`，加载时会拒绝同一 `group_id` 或 `capture_session` 跨训练、验证和测试集。正式 `e2e_auto` 基准在模型完成预测前只读取手机照片：
+
+```bash
+python -m benchmarks.geometry_e2e.run --quad-model /tmp/quadlocator-s.onnx
+```
+
+未训练的 smoke checkpoint 只验证接口，不代表模型质量。发布 gate 至少需要 100 个独立实拍 group；当前四场景仅作回归烟测。
+
+DocAligner 的上游工具依赖较多，建议在独立 benchmark venv 中复现，不进入核心安装：
+
+```bash
+source .venv/bin/activate
+which python
+python -m venv benchmarks/geometry_e2e/.venv-docaligner
+source benchmarks/geometry_e2e/.venv-docaligner/bin/activate
+which python
+python -m pip install -r benchmarks/geometry_e2e/requirements-docaligner.txt
+python -m pip install -e .
+MPLCONFIGDIR=/tmp/screenrestore-matplotlib python -m benchmarks.geometry_e2e.docaligner_baseline --model-config fastvit_sa24
 ```
 
 ## 测试与打包
@@ -152,11 +189,9 @@ PowerShell -ExecutionPolicy Bypass -File scripts/install_optional_models.ps1 -Pl
 - Restoration 模型用于去模糊、去噪、去摩尔纹等观测恢复先验；Enhancement 模型会生成统计意义上的细节，不能保证等于原始数字帧。两类结果不会混用同一个名称或覆盖 Fidelity。
 - ScreenRestore 只把多帧中确实存在的替代像素标为“观测补回”，不会把反光抑制或 inpainting 描述为大面积真实恢复。
 
-## 配对实拍基准
+## Oracle 恢复基准
 
-`测试数据/` 中的 7 组显示器照片及“电影测试二”都有对应数字原图。原图只用于 SIFT +
-MAGSAC 内容定位和最终评分，不进入恢复像素路径。以下命令生成逐例 Geometry、Fidelity、
-AI Enhanced、差异热图、JSON 指标和离线 HTML 对比页：
+`测试数据/` 中的 7 组显示器照片及“电影测试二”都有对应数字原图。该协议会先用数字原图经 SIFT + MAGSAC 求出实拍中的内容四角，再测试准确几何下的后处理能力。因此它是 `oracle_restoration`，不能代表自动定位或端到端自动扫描成绩。以下命令生成逐例 Geometry、Fidelity、AI Enhanced、差异热图、JSON 指标和离线 HTML 对比页：
 
 ```bash
 source .venv/bin/activate
@@ -164,7 +199,7 @@ which python
 python scripts/evaluate_paired.py
 ```
 
-当前 8 组基准中，Fidelity 相对 Geometry 的亮度 SSIM 为 8/8 改善、PSNR 为 7/8
+在这套 oracle 几何基准中，Fidelity 相对 Geometry 的亮度 SSIM 为 8/8 改善、PSNR 为 7/8
 改善；平均 PSNR 从 19.9299 提升到 20.5850 dB，平均亮度 SSIM 从 0.7631 提升到
 0.8063，平均 ΔE 从 10.5796 降到 9.4101。测试 4 和测试 6 的亮度 SSIM 分别提升
 0.0980 和 0.0863；测试 5 的 PSNR 变化为 -0.0101 dB、SSIM 仍提升 0.0041，避免为

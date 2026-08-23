@@ -1,0 +1,5 @@
+# 独立基线依赖，不进入 ScreenRestore 核心安装。
+docaligner-docsaid==1.1.1
+onnxruntime>=1.17,<2
+# 上游允许 OpenCV 5，但项目核心锁定 <5；独立 benchmark 也保持相同主版本。
+opencv-python>=4.12,<5

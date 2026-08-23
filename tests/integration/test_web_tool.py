@@ -101,6 +101,10 @@ def test_web_health_static_and_restore_roundtrip() -> None:
         diagnostics = json.loads(base64.urlsafe_b64decode(padded))
         assert diagnostics["status"] == "ok"
         assert diagnostics["fusion"]["claim"] == "single-observation"
+        assert diagnostics["fusion"]["clipped_observation_fraction"] > 0
+        assert diagnostics["fusion"]["unresolved_fraction"] == 0
+        assert diagnostics["provenance"]["variant"] == "archive"
+        assert diagnostics["provenance"]["pixel_origin_fraction"]["observed"] == 1.0
         assert "lens_distortion" not in diagnostics["operator_timings"]
         assert diagnostics["artifacts"]["demoire"]["mode"] == "joint_edge_aware"
         assert "activated" in diagnostics["artifacts"]["dehalo"]

@@ -1,6 +1,8 @@
 {
   "geometry": {
     "status": "FAIL",
+    "candidate_generation": "FAIL",
+    "candidate_selection": "PASS",
     "scenes": {
       "后台芭蕾": {
         "status": "FAIL",
@@ -8,11 +10,31 @@
         "polygon_iou": 0.5736,
         "max_corner_error_px": 430.03,
         "corner_threshold": 0.02,
-        "iou_threshold": 0.9
+        "iou_threshold": 0.9,
+        "candidate_count": 2,
+        "best_candidate_corner_error": 0.039344,
+        "best_candidate_iou": 0.8406,
+        "selected_candidate_corner_error": 0.139826,
+        "selected_candidate_iou": 0.5736,
+        "selected_candidate_rank": 2,
+        "candidate_generation": "FAIL",
+        "candidate_selection": "NOT_EVALUATED"
       },
       "复古街头": {
         "status": "FAIL",
-        "reason": "no target detected"
+        "corner_error_normalized": 1.0,
+        "polygon_iou": 0.0,
+        "max_corner_error_px": 999,
+        "corner_threshold": 0.02,
+        "iou_threshold": 0.9,
+        "candidate_count": 0,
+        "best_candidate_corner_error": 1.0,
+        "best_candidate_iou": 0.0,
+        "selected_candidate_corner_error": 1.0,
+        "selected_candidate_iou": 0.0,
+        "selected_candidate_rank": -1,
+        "candidate_generation": "FAIL",
+        "candidate_selection": "NOT_EVALUATED"
       },
       "电脑屏幕": {
         "status": "FAIL",
@@ -20,7 +42,15 @@
         "polygon_iou": 0.5064,
         "max_corner_error_px": 573.38,
         "corner_threshold": 0.02,
-        "iou_threshold": 0.9
+        "iou_threshold": 0.9,
+        "candidate_count": 3,
+        "best_candidate_corner_error": 0.030917,
+        "best_candidate_iou": 0.8833,
+        "selected_candidate_corner_error": 0.177239,
+        "selected_candidate_iou": 0.5064,
+        "selected_candidate_rank": 3,
+        "candidate_generation": "FAIL",
+        "candidate_selection": "NOT_EVALUATED"
       },
       "红发女子": {
         "status": "FAIL",
@@ -28,7 +58,15 @@
         "polygon_iou": 0.4035,
         "max_corner_error_px": 684.69,
         "corner_threshold": 0.02,
-        "iou_threshold": 0.9
+        "iou_threshold": 0.9,
+        "candidate_count": 2,
+        "best_candidate_corner_error": 0.24196,
+        "best_candidate_iou": 0.4035,
+        "selected_candidate_corner_error": 0.24196,
+        "selected_candidate_iou": 0.4035,
+        "selected_candidate_rank": 1,
+        "candidate_generation": "FAIL",
+        "candidate_selection": "NOT_EVALUATED"
       }
     }
   },

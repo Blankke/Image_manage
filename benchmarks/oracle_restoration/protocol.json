@@ -1,0 +1,8 @@
+{
+  "protocol": "oracle_restoration",
+  "protocol_version": 1,
+  "purpose": "在参考辅助四角固定后隔离评估恢复算子能力",
+  "reference_may_determine_geometry": true,
+  "may_claim_end_to_end_auto": false,
+  "entrypoint": "python scripts/validate_paired_samples.py"
+}

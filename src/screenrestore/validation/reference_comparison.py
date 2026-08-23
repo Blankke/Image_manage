@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from screenrestore.operators.geometry import (
+from screenrestore.geometry import (
     AspectRatioMode,
     InterpolationMode,
     order_corners,

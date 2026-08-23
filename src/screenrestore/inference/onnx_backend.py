@@ -24,9 +24,11 @@ class OnnxBackend(InferenceBackend):
         """检查可选依赖和模型文件。"""
 
         try:
-            import onnxruntime  # noqa: F401
+            import onnxruntime
         except ImportError:
             return False, "未安装 onnxruntime；核心经典流水线不受影响"
+        if hasattr(onnxruntime, "disable_telemetry_events"):
+            onnxruntime.disable_telemetry_events()
         model_path = self.manifest.resolve_path(self.manifest.model_path or "")
         if not model_path.is_file():
             return False, f"未找到 ONNX 模型：{model_path}"
@@ -56,6 +58,8 @@ class OnnxBackend(InferenceBackend):
         try:
             import onnxruntime as ort
 
+            if hasattr(ort, "disable_telemetry_events"):
+                ort.disable_telemetry_events()
             if self._session is None:
                 self._session = ort.InferenceSession(
                     str(self.manifest.resolve_path(self.manifest.model_path or "")),

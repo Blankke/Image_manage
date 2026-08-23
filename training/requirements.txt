@@ -1,0 +1,6 @@
+# QuadLocator-S 训练与导出；核心 ScreenRestore 不安装这些依赖。
+torch>=2.4,<3
+Pillow>=10.2,<13
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<3
+onnx>=1.16,<2

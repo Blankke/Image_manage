@@ -3,7 +3,7 @@
 使用范例：
     source .venv/bin/activate
     which python
-    python scripts/validate_samples.py
+    python scripts/validate_samples.py --quad-model models/weights/quadlocator-s.onnx
 
 说明：脚本读取根目录的“电影屏幕测试.jpg”和“纸质海报测试.jpg”，自动检测四角，
 分别应用 cinema/document 预设，在 validation_outputs/ 保存几何基线、完整恢复图和
@@ -30,9 +30,13 @@ from screenrestore.core.presets import (
     build_default_pipeline,
     build_registry,
 )
+from screenrestore.geometry import (
+    AutomaticGeometryService,
+    OnnxQuadDetector,
+    target_class_for_scene,
+)
 from screenrestore.io.image_exporter import ExportFormat, ExportOptions, export_image
 from screenrestore.io.image_loader import load_image
-from screenrestore.operators.geometry import detect_quadrilaterals
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,11 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--quad-model", type=Path)
     args = parser.parse_args(argv)
     root = args.root.expanduser().resolve()
     output_directory = (args.output_dir or root / "validation_outputs").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     registry = build_registry()
+    geometry_service = AutomaticGeometryService(
+        OnnxQuadDetector(args.quad_model) if args.quad_model is not None else None
+    )
     diagnostics: list[dict[str, object]] = []
     total_steps = len(CASES) * 4
     completed = 0
@@ -71,13 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         document = load_image(source_path)
         completed += 1
 
-        candidates = detect_quadrilaterals(document.proxy())
-        if not candidates:
-            raise RuntimeError(f"{case.name} 自动四角检测失败")
-        candidate = candidates[0]
-        proxy = document.proxy()
-        normalized = candidate.corners / np.array(
-            [proxy.shape[1] - 1, proxy.shape[0] - 1], np.float32
+        decision = geometry_service.localize(
+            document.original_rgb,
+            target_class_for_scene(case.preset.value),
+        )
+        if not decision.accepted or decision.proposed_corners is None:
+            reasons = ", ".join(reason.value for reason in decision.rejection_reasons)
+            raise RuntimeError(f"{case.name} 自动定位被拒绝：{reasons}")
+        normalized = decision.proposed_corners / np.array(
+            [document.width - 1, document.height - 1], np.float32
         )
         pipeline = build_default_pipeline(registry)
         apply_preset(pipeline, case.preset)
@@ -122,8 +132,9 @@ def main(argv: list[str] | None = None) -> int:
                 "preset": case.preset.value,
                 "input_size": [document.width, document.height],
                 "output_size": [int(restored.shape[1]), int(restored.shape[0])],
-                "candidate_confidence": round(candidate.confidence, 6),
-                "corners": np.rint(candidate.corners).astype(int).tolist(),
+                "localization_confidence": round(decision.confidence, 6),
+                "localization_backend": decision.backend,
+                "corners": np.rint(decision.proposed_corners).astype(int).tolist(),
                 "geometry_metrics": _quality_metrics(geometry_result),
                 "restored_metrics": _quality_metrics(restored),
                 "operator_timings": {
@@ -151,9 +162,7 @@ def _quality_metrics(image_rgb: np.ndarray) -> dict[str, float]:
         "black_clipping_ratio": round(float(np.mean(gray <= 2 / 255)), 6),
         "white_clipping_ratio": round(float(np.mean(gray >= 253 / 255)), 6),
         "mean_luminance": round(float(gray.mean()), 6),
-        "laplacian_variance": round(
-            float(cv2.Laplacian(gray, cv2.CV_32F).var()), 8
-        ),
+        "laplacian_variance": round(float(cv2.Laplacian(gray, cv2.CV_32F).var()), 8),
         "row_periodic_energy": round(_profile_periodic_energy(gray.mean(axis=1)), 8),
         "column_periodic_energy": round(_profile_periodic_energy(gray.mean(axis=0)), 8),
         "row_black_level_nonuniformity": round(

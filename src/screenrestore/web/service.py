@@ -20,6 +20,7 @@ from screenrestore.core.presets import (
     apply_processing_mode,
     build_default_pipeline,
 )
+from screenrestore.geometry import AutomaticGeometryService, target_class_for_scene
 from screenrestore.inference.backend import InferenceError
 from screenrestore.inference.factory import create_inference_backend
 from screenrestore.inference.model_manifest import (
@@ -29,7 +30,6 @@ from screenrestore.inference.model_manifest import (
 )
 from screenrestore.io.image_exporter import ExportFormat, encode_image_bytes
 from screenrestore.io.image_loader import decode_image_bytes
-from screenrestore.operators.geometry import detect_quadrilaterals
 from screenrestore.operators.lens_distortion import (
     LensCalibrationParameters,
     LensDistortionParameters,
@@ -41,6 +41,7 @@ from screenrestore.operators.multiframe_fusion import (
     MultiFrameFusionParameters,
     align_and_fuse,
 )
+from screenrestore.provenance import ArchiveVariant, PixelOrigin, ProvenanceMap, ProvenanceReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,11 +139,13 @@ class WebRestoreService:
         self,
         max_pixels_per_image: int = 80_000_000,
         model_directories: list[str | Path] | None = None,
+        geometry_service: AutomaticGeometryService | None = None,
     ) -> None:
         if max_pixels_per_image <= 0:
             raise ValueError("Web 单图像素上限必须大于 0")
         self.max_pixels_per_image = max_pixels_per_image
         self.model_catalog = WebModelCatalog(model_directories)
+        self.geometry_service = geometry_service or AutomaticGeometryService()
 
     def models(self) -> dict[str, object]:
         """列出浏览器可安全选择的本地模型。"""
@@ -170,21 +173,24 @@ class WebRestoreService:
         image_rgb: np.ndarray,
         lens_settings: dict[str, Any] | None = None,
         *,
+        target_scene: str | None = None,
         include_preview: bool = False,
     ) -> dict[str, object]:
-        """在可选镜头校正后的代理图上返回归一化四边形候选。"""
+        """在可选镜头校正后返回统一自动定位决策与诊断候选。"""
 
         working = image_rgb
         lens_metadata: dict[str, object] | None = None
         if lens_settings and bool(lens_settings.get("enabled", False)):
             lens_params = _lens_parameters(lens_settings)
             working, lens_metadata = undistort_lens(image_rgb, lens_params)
-        proxy, scale = _proxy(working, 1400)
-        candidates = detect_quadrilaterals(proxy)
         height, width = working.shape[:2]
+        decision = self.geometry_service.localize(
+            working,
+            target_class_for_scene(target_scene),
+        )
         response_candidates = []
-        for candidate in candidates:
-            normalized = candidate.corners / scale / np.array(
+        for candidate in decision.candidates:
+            normalized = candidate.corners / np.array(
                 [max(1, width - 1), max(1, height - 1)],
                 np.float32,
             )
@@ -193,10 +199,13 @@ class WebRestoreService:
                     "corners": np.clip(normalized, 0.0, 1.0).tolist(),
                     "confidence": candidate.confidence,
                     "scores": candidate.scores,
+                    "source": candidate.source,
+                    "layer": candidate.layer.value,
                 }
             )
         response: dict[str, object] = {
             "image_size": [width, height],
+            "localization": decision.to_dict(working.shape),
             "candidates": response_candidates,
             "lens": lens_metadata,
         }
@@ -255,6 +264,7 @@ class WebRestoreService:
         )
 
         fusion_diagnostics: dict[str, object]
+        provenance_notes: tuple[str, ...] = ()
         if len(images_rgb) > 1:
             raw_fusion = values.get("fusion", {})
             if not isinstance(raw_fusion, dict):
@@ -263,16 +273,28 @@ class WebRestoreService:
             fusion_result = align_and_fuse(images_rgb, fusion_params, ProcessingContext(preview=False))
             source = fusion_result.image_rgb
             fusion_diagnostics = fusion_result.diagnostics
+            provenance = ProvenanceMap.from_fusion_masks(
+                source.shape,
+                fusion_result.recovered_observation_mask,
+                fusion_result.unresolved_mask,
+            )
         else:
             source = images_rgb[0]
-            gray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
-            potentially_missing = (gray <= 2) | (gray >= 253)
+            # 单帧纯黑/纯白也可能是作品本身，缺少反光/损伤证据时只报告裁切观测，
+            # 不擅自把它标成 unresolved。
+            clipped_observation = np.all(source <= 2, axis=2) | np.all(source >= 253, axis=2)
+            provenance = ProvenanceMap.observed(source.shape)
+            clipped_fraction = float(clipped_observation.mean())
+            if clipped_fraction > 0:
+                provenance_notes = (
+                    "单帧存在全通道裁切观测；未获得反光或损伤证据，来源仍记为 observed。",
+                )
             fusion_diagnostics = {
                 "input_frames": 1,
                 "used_frames": 1,
                 "claim": "single-observation",
-                "potentially_missing_fraction": float(potentially_missing.mean()),
-                "unresolved_fraction": float(potentially_missing.mean()),
+                "clipped_observation_fraction": clipped_fraction,
+                "unresolved_fraction": 0.0,
             }
 
         pipeline = build_default_pipeline()
@@ -300,17 +322,19 @@ class WebRestoreService:
             detected = self.detect(
                 source,
                 lens_settings if lens_enabled else None,
+                target_scene=preset.value,
             )
-            candidates = detected["candidates"]
-            if not isinstance(candidates, list) or not candidates:
-                raise ValueError("自动四角检测失败，请在画布上手动调整四角")
-            best = candidates[0]
-            if not isinstance(best, dict):
-                raise ValueError("自动四角检测返回无效候选")
-            geometry_values["corners"] = best["corners"]
+            localization = detected["localization"]
+            if not isinstance(localization, dict) or not localization.get("accepted"):
+                reasons = (
+                    localization.get("rejection_reasons", [])
+                    if isinstance(localization, dict)
+                    else []
+                )
+                raise ValueError(f"自动定位已拒绝归档：{', '.join(str(item) for item in reasons)}")
+            geometry_values["corners"] = localization["corners"]
             detection_diagnostics = {
-                "confidence": best["confidence"],
-                "scores": best["scores"],
+                **localization,
                 "corrected_input_size": detected["image_size"],
             }
         else:
@@ -354,6 +378,19 @@ class WebRestoreService:
             pipeline.state("enhancement_model").enabled = False
             context = ProcessingContext(preview=False)
             output = pipeline.process(source, context, source_id="web-model-fallback")
+        if output_variant == OutputVariant.AI_ENHANCED and fallback_reason is None:
+            generated_mask = provenance.labels != int(PixelOrigin.UNRESOLVED)
+            provenance.mark(generated_mask, PixelOrigin.GENERATED)
+        provenance_report = ProvenanceReport(
+            variant=(
+                ArchiveVariant.ENHANCED
+                if output_variant == OutputVariant.AI_ENHANCED and fallback_reason is None
+                else ArchiveVariant.ARCHIVE
+            ),
+            provenance=provenance,
+            geometry=detection_diagnostics,
+            notes=provenance_notes,
+        )
         diagnostics: dict[str, object] = {
             "status": "ok",
             "preset": preset.value,
@@ -365,6 +402,7 @@ class WebRestoreService:
             "output_size": [output.shape[1], output.shape[0]],
             "fusion": fusion_diagnostics,
             "geometry_detection": detection_diagnostics,
+            "provenance": provenance_report.to_dict(),
             "operator_timings": {
                 key: round(value, 6) for key, value in pipeline.last_timings.items()
             },

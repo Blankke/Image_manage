@@ -5,24 +5,41 @@
 ```text
 PySide6 UI / CLI / 本地 Web UI + HTTP API
         ↓
-多帧观测融合（可选）→ ImageDocument + ImagePipeline + ProcessingContext
+AutomaticGeometryService → accepted / rejected + content/outer + aspect
         ↓
-方向 → 镜头畸变 → 平面透视 → 弯曲 Mesh → 独立经典恢复算子
+多帧观测融合（可选）→ ProvenanceMap → ImageDocument + ImagePipeline + ProcessingContext
+        ↓
+方向 → 镜头畸变 → 平面透视 → 弯曲 Mesh → 受约束光度/独立恢复算子
         ↓
 OpenCV / NumPy / SciPy / Pillow
 
 可选：RestorationModelOperator / EnhancementModelOperator
       → ModelManifest(role + task) → External / ONNX / OpenVINO → tiled_inference
+
+离线训练：datasets manifest → QuadLocator-S → ONNX → OnnxQuadDetector
 ```
 
 - `core/` 不依赖 Qt，定义只读图像文档、参数协议、算子接口、流水线、LRU 缓存、历史和取消令牌。
+- `geometry/` 是内容/外框四边形、检测器协议、ONNX 解码、原图精修、统一置信度、画幅估计和单应变换的权威实现。自动定位在任何 clean reference 被读取前完成。
 - `operators/` 每个文件对应独立图像步骤。算子不得原地修改输入。
+- `restoration/` 提供受约束光度校正和有界 residual；它不包含 UI、流水线状态或生成式整图重绘。
+- `provenance/` 管理观测、其他帧补回、估计、生成和未解决的像素级来源，并生成 Archive/Enhanced 报告。
 - `ui/` 只协调状态、显示和线程；算法运行在 `QThreadPool` worker，worker 只通过信号返回结果。
 - `web/` 提供无框架、同源的静态前端和版本化本地 HTTP API；服务层只组合核心流水线，HTTP 层负责上传上限、并发上限、安全响应头和二进制编码，不在磁盘缓存用户图片。
 - `io/` 负责加载、项目和原子导出；GUI 与 CLI 不复制算法。
 - `inference/` 只在实际选择后惰性导入可选运行时，核心安装不包含它们；恢复模型与
   感知增强模型是两个固定语义节点，清单必须声明 `role` 和 `task`。
 - `diagnostics/` 提供直方图、频谱和日志配置。
+- `training/` 与核心安装隔离，当前包含 QuadLocator-S 合成器、数据集、损失、CPU/MPS/CUDA 训练和 ONNX 导出。
+- `benchmarks/geometry_e2e` 是 photo-only 自动几何协议；`benchmarks/oracle_restoration` 明确记录参考辅助协议。两者指标不得混用。
+
+## 自动几何边界
+
+`QuadDetector` 只产生粗预测和模型证据，`refine_quad_edges()` 只在原图窄带内精修像素落点，`ConfidencePolicy` 决定是否自动接受。`AutomaticGeometryService` 是 CLI、Web、GUI 与 benchmark 共用的编排入口。
+
+经典 fallback 能生成诊断候选，但无法区分嵌套矩形中的画芯、卡纸与外框。训练模型缺失或证据不足时，服务返回 `rejected`；调用方可进入显式手工流程，但不得在无人值守任务中改用全图继续。
+
+ONNX 运行时契约固定包含：`content_corner_heatmaps`、`outer_corner_heatmaps`、`content_mask_logits`、`boundary_logits`、`presence_logits` 和 `class_logits`。模型、导出脚本与运行时共同测试这些名字和张量语义。
 
 ## 图像契约
 

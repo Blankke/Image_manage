@@ -20,24 +20,29 @@ Exit code: 0=PASS, 1=FAIL/regression
 
 from __future__ import annotations
 
-import argparse, json, sys, math, time
-from dataclasses import dataclass, field
+import argparse
+import json
+import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-import cv2, numpy as np
+import cv2
+import numpy as np
 
-from screenrestore.io.image_loader import load_image
-from screenrestore.validation import compare_images, register_reference, ReferenceRegistration
+from screenrestore.core.operator import ProcessingContext
 from screenrestore.core.pipeline import OperatorRegistry
 from screenrestore.core.presets import (
-    PresetId, ProcessingMode,
-    apply_preset, apply_processing_mode,
-    build_default_pipeline, build_registry,
+    PresetId,
+    ProcessingMode,
+    apply_preset,
+    apply_processing_mode,
+    build_default_pipeline,
+    build_registry,
 )
-from screenrestore.semantic import SemanticAnalyzer, RestorationPlanner
+from screenrestore.io.image_loader import load_image
+from screenrestore.semantic import RestorationPlanner, SceneContext, SemanticAnalyzer
 from screenrestore.semantic.target_localizer import TargetLocalizer
-from screenrestore.operators.geometry import warp_perspective, AspectRatioMode, InterpolationMode
+from screenrestore.validation import compare_images, register_reference
 
 # ── Gate 阈值 ────────────────────────────────────────────
 
@@ -184,7 +189,7 @@ class Evaluator:
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.registry = registry
-        self.gt = json.loads((data_dir.parent / "benchmarks/ground_truth/targets.json").read_text())
+        self.gt_path = data_dir.parent / "benchmarks/ground_truth/targets.json"
 
     def evaluate_all(self) -> dict:
         scenes = discover_scenes(self.data_dir)
@@ -203,40 +208,156 @@ class Evaluator:
     def _eval_geometry(self, scenes: list[SceneCase]) -> dict:
         localizer = TargetLocalizer()
         scene_results = {}
-        all_pass = True
+        all_gen_pass = True
+        all_sel_pass = True
+        all_candidates_data = {}  # 保存到 localization_candidates.json
+
+        # 先冻结全部 photo-only 预测，再加载人工角点，结构上阻断 oracle 参与定位。
+        predictions = {}
+        for scene in scenes:
+            photo = load_image(scene.photo).original_rgb
+            context = SceneContext(scene_type=scene.preset.value)
+            predictions[scene.name] = (photo.shape, localizer.localize(photo, context))
+        ground_truth = json.loads(self.gt_path.read_text(encoding="utf-8"))
 
         for s in scenes:
-            gt = self.gt.get(s.name, {})
+            gt = ground_truth.get(s.name, {})
             if not gt:
-                scene_results[s.name] = {"status": "SKIP", "reason": "no ground truth"}
+                scene_results[s.name] = {
+                    "status": "SKIP", "reason": "no ground truth",
+                    "candidate_generation": "SKIP",
+                    "candidate_selection": "SKIP",
+                }
                 continue
 
-            photo = load_image(s.photo).original_rgb
-            from screenrestore.semantic.context import SceneContext
-            ctx = SceneContext()
-            ctx = localizer.localize(photo, ctx)
+            photo_shape, ctx = predictions[s.name]
 
+            oracle_corners = np.array(gt["oracle_corners"])
+
+            # ── 对所有候选做 benchmark-only 评估 ──
+            candidates = ctx.localization_candidates
+            candidate_evals = []
+            for idx, cand in enumerate(candidates):
+                corner_err, iou, max_err = _match_corners(cand.polygon, oracle_corners)
+                candidate_evals.append({
+                    "id": idx,
+                    "source": cand.source,
+                    "polygon": cand.polygon.astype(float).tolist(),
+                    "runtime_score": round(cand.runtime_score, 6),
+                    "geometry_score": round(cand.geometry_score, 6),
+                    "semantic_score": round(cand.semantic_score, 6),
+                    "corner_error_normalized": corner_err,
+                    "polygon_iou": iou,
+                    "max_corner_error_px": max_err,
+                })
+
+            # 找 best candidate（按 corner_error 排序，GT-only）
+            sorted_by_error = sorted(candidate_evals, key=lambda c: c["corner_error_normalized"])
+            best_candidate = sorted_by_error[0] if sorted_by_error else None
+
+            # 找 selected candidate（如果 localizer 选了一个）
+            selected_candidate = None
+            selected_rank = None
+            if ctx.has_target() and ctx.target_polygon is not None:
+                sel_err, sel_iou, sel_max = _match_corners(ctx.target_polygon, oracle_corners)
+                # 在候选列表中查找匹配的
+                for rank, ce in enumerate(sorted_by_error):
+                    if abs(ce["corner_error_normalized"] - sel_err) < 1e-6 and abs(ce["polygon_iou"] - sel_iou) < 1e-6:
+                        selected_rank = rank + 1  # 1-indexed
+                        selected_candidate = {
+                            "corner_error_normalized": sel_err,
+                            "polygon_iou": sel_iou,
+                            "max_corner_error_px": sel_max,
+                            "rank": selected_rank,
+                        }
+                        break
+                if selected_candidate is None:
+                    # fallback: 没在候选池找到精确匹配（理论上不应发生）
+                    selected_candidate = {
+                        "corner_error_normalized": sel_err,
+                        "polygon_iou": sel_iou,
+                        "max_corner_error_px": sel_max,
+                        "rank": -1,
+                    }
+            else:
+                selected_candidate = {
+                    "corner_error_normalized": 1.0,
+                    "polygon_iou": 0.0,
+                    "max_corner_error_px": 999,
+                    "rank": -1,
+                }
+
+            candidate_count = len(candidates)
+            best_corner = best_candidate["corner_error_normalized"] if best_candidate else 1.0
+            best_iou = best_candidate["polygon_iou"] if best_candidate else 0.0
+            sel_corner = selected_candidate["corner_error_normalized"]
+            sel_iou = selected_candidate["polygon_iou"]
+            sel_rank = selected_candidate["rank"]
+
+            # ── P2: Split gate ──
+            gen_threshold = {"corner_error_max": 0.03, "polygon_iou_min": 0.85}
+            sel_threshold = {"corner_error_max": 0.02, "polygon_iou_min": 0.90}
+
+            gen_pass = best_corner <= gen_threshold["corner_error_max"] and best_iou >= gen_threshold["polygon_iou_min"]
+            if not gen_pass:
+                all_gen_pass = False
+
+            if gen_pass:
+                sel_pass = sel_corner <= sel_threshold["corner_error_max"] and sel_iou >= sel_threshold["polygon_iou_min"]
+                if not sel_pass:
+                    all_sel_pass = False
+            else:
+                sel_pass = "NOT_EVALUATED"
+
+            # 旧版兼容 status
             if not ctx.has_target() or ctx.target_polygon is None:
-                scene_results[s.name] = {"status": "FAIL", "reason": "no target detected"}
-                all_pass = False
-                continue
-
-            corner_err, iou, max_err = _match_corners(ctx.target_polygon, np.array(gt["oracle_corners"]))
-            passed = corner_err <= GATE["geometry"]["corner_error_max"] and iou >= GATE["geometry"]["polygon_iou_min"]
-            if not passed:
-                all_pass = False
+                passed = False
+                all_gen_pass = False
+            else:
+                old_corner_err, old_iou, _ = _match_corners(ctx.target_polygon, oracle_corners)
+                passed = old_corner_err <= GATE["geometry"]["corner_error_max"] and old_iou >= GATE["geometry"]["polygon_iou_min"]
 
             scene_results[s.name] = {
                 "status": "PASS" if passed else "FAIL",
-                "corner_error_normalized": corner_err,
-                "polygon_iou": iou,
-                "max_corner_error_px": max_err,
+                "corner_error_normalized": sel_corner,
+                "polygon_iou": sel_iou,
+                "max_corner_error_px": selected_candidate.get("max_corner_error_px", 999),
                 "corner_threshold": GATE["geometry"]["corner_error_max"],
                 "iou_threshold": GATE["geometry"]["polygon_iou_min"],
+                # P1: candidate recall
+                "candidate_count": candidate_count,
+                "best_candidate_corner_error": best_corner,
+                "best_candidate_iou": best_iou,
+                "selected_candidate_corner_error": sel_corner,
+                "selected_candidate_iou": sel_iou,
+                "selected_candidate_rank": sel_rank,
+                # P2: split gate
+                "candidate_generation": "PASS" if gen_pass else "FAIL",
+                "candidate_selection": "PASS" if sel_pass is True else ("FAIL" if sel_pass is False else "NOT_EVALUATED"),
             }
 
+            all_candidates_data[s.name] = {
+                "photo_size": list(photo_shape[:2]),
+                "candidate_count": candidate_count,
+                "candidates": candidate_evals,
+                "best_candidate": best_candidate,
+                "selected_candidate": selected_candidate,
+                "candidate_generation": scene_results[s.name]["candidate_generation"],
+                "candidate_selection": scene_results[s.name]["candidate_selection"],
+            }
+
+        # 保存 localization_candidates.json
+        cand_path = self.output_dir / "localization_candidates.json"
+        with cand_path.open("w", encoding="utf-8") as handle:
+            json.dump(all_candidates_data, handle, indent=2, ensure_ascii=False)
+        print(f"📄 {cand_path}")
+
         return {
-            "status": "PASS" if all_pass else "FAIL",
+            "protocol": "e2e_auto_smoke",
+            "oracle_loaded_after_all_predictions": True,
+            "status": "PASS" if (all_gen_pass and all_sel_pass) else "FAIL",
+            "candidate_generation": "PASS" if all_gen_pass else "FAIL",
+            "candidate_selection": "PASS" if all_sel_pass else ("FAIL" if not all_gen_pass else "NOT_EVALUATED"),
             "scenes": scene_results,
         }
 
@@ -263,7 +384,6 @@ class Evaluator:
         e_warp, diag = _moire_energy(warped, ref)
 
         # Restored (Oracle pipeline)
-        from screenrestore.semantic import SemanticAnalyzer, RestorationPlanner
         analyzer = SemanticAnalyzer()
         planner = RestorationPlanner()
         ctx = analyzer.analyze(photo)
@@ -277,13 +397,15 @@ class Evaluator:
         for oid, rec in plan.operators.items():
             try:
                 st = pipe.state(oid)
-                if rec.enabled != st.enabled: pipe.set_enabled(oid, rec.enabled)
+                if rec.enabled != st.enabled:
+                    pipe.set_enabled(oid, rec.enabled)
                 if rec.params:
-                    cur = st.params.to_dict(); cur.update(rec.params)
+                    cur = st.params.to_dict()
+                    cur.update(rec.params)
                     pipe.update_parameters(oid, cur)
-            except ValueError: pass
+            except ValueError:
+                pass
 
-        from screenrestore.core.operator import ProcessingContext
         pc = ProcessingContext(preview=False)
         restored = pipe.process(warped, pc, source_id="eval:demoire")
         if restored.dtype != np.uint8:
@@ -325,7 +447,6 @@ class Evaluator:
         warped = cv2.warpPerspective(photo, H, (rw, rh), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE)
 
         # Run restoration
-        from screenrestore.semantic import SemanticAnalyzer, RestorationPlanner
         analyzer = SemanticAnalyzer()
         planner = RestorationPlanner()
         ctx = analyzer.analyze(photo)
@@ -339,13 +460,15 @@ class Evaluator:
         for oid, rec in plan.operators.items():
             try:
                 st = pipe.state(oid)
-                if rec.enabled != st.enabled: pipe.set_enabled(oid, rec.enabled)
+                if rec.enabled != st.enabled:
+                    pipe.set_enabled(oid, rec.enabled)
                 if rec.params:
-                    cur = st.params.to_dict(); cur.update(rec.params)
+                    cur = st.params.to_dict()
+                    cur.update(rec.params)
                     pipe.update_parameters(oid, cur)
-            except ValueError: pass
+            except ValueError:
+                pass
 
-        from screenrestore.core.operator import ProcessingContext
         pc = ProcessingContext(preview=False)
         restored = pipe.process(warped, pc, source_id="eval:reflection")
         if restored.dtype != np.uint8:
@@ -395,7 +518,6 @@ class Evaluator:
         warped = cv2.warpPerspective(photo, H, (rw, rh), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE)
 
         # Run restoration
-        from screenrestore.semantic import SemanticAnalyzer, RestorationPlanner
         analyzer = SemanticAnalyzer()
         planner = RestorationPlanner()
         ctx = analyzer.analyze(photo)
@@ -409,19 +531,20 @@ class Evaluator:
         for oid, rec in plan.operators.items():
             try:
                 st = pipe.state(oid)
-                if rec.enabled != st.enabled: pipe.set_enabled(oid, rec.enabled)
+                if rec.enabled != st.enabled:
+                    pipe.set_enabled(oid, rec.enabled)
                 if rec.params:
-                    cur = st.params.to_dict(); cur.update(rec.params)
+                    cur = st.params.to_dict()
+                    cur.update(rec.params)
                     pipe.update_parameters(oid, cur)
-            except ValueError: pass
+            except ValueError:
+                pass
 
-        from screenrestore.core.operator import ProcessingContext
         pc = ProcessingContext(preview=False)
         restored = pipe.process(warped, pc, source_id="eval:cinema")
         if restored.dtype != np.uint8:
             restored = np.clip(restored*255, 0, 255).astype(np.uint8)
 
-        wm = compare_images(warped, ref)
         rm = compare_images(restored, ref)
 
         # Shadow analysis: Y < threshold in reference
@@ -434,7 +557,6 @@ class Evaluator:
 
         if shadow.sum() > 100:
             # Chroma in shadow
-            warped_chroma = np.sqrt(warped_lab[shadow, 1]**2 + warped_lab[shadow, 2]**2).mean()
             restored_chroma = np.sqrt(restored_lab[shadow, 1]**2 + restored_lab[shadow, 2]**2).mean()
             ref_chroma = np.sqrt(ref_lab[shadow, 1]**2 + ref_lab[shadow, 2]**2).mean()
 
@@ -443,13 +565,12 @@ class Evaluator:
             shadow_de_after = float(np.linalg.norm(
                 restored_lab[shadow] - ref_lab[shadow], axis=1).mean())
 
-            black_clip_before = wm["black_clipping_ratio"]
             black_clip_after = rm["black_clipping_ratio"]
 
             passed = black_clip_after <= GATE["cinema"]["black_clipping_max"]
         else:
-            shadow_de_before = 0; shadow_de_after = 0
-            black_clip_before = wm["black_clipping_ratio"]
+            shadow_de_before = 0
+            shadow_de_after = 0
             black_clip_after = rm["black_clipping_ratio"]
             passed = black_clip_after <= GATE["cinema"]["black_clipping_max"]
 
@@ -483,7 +604,7 @@ def main(argv=None):
     od.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*60}")
-    print(f"🔍 ScreenRestore Evaluator")
+    print("🔍 ScreenRestore Evaluator")
     print(f"{'='*60}\n")
 
     registry = build_registry()
@@ -491,7 +612,8 @@ def main(argv=None):
     results = evaluator.evaluate_all()
 
     scorecard_path = od / "scorecard.json"
-    json.dump(results, open(scorecard_path, "w"), indent=2, ensure_ascii=False)
+    with scorecard_path.open("w", encoding="utf-8") as handle:
+        json.dump(results, handle, indent=2, ensure_ascii=False)
     print(f"📄 {scorecard_path}\n")
 
     # Print summary
@@ -503,9 +625,23 @@ def main(argv=None):
         print(f"{icon} {gate.upper():<15} {status}")
 
         if gate == "geometry":
+            gen_status = data.get("candidate_generation", "?")
+            sel_status = data.get("candidate_selection", "?")
+            gen_icon = "✅" if gen_status == "PASS" else "❌"
+            sel_icon = "✅" if sel_status == "PASS" else ("❌" if sel_status == "FAIL" else "⬜")
+            print(f"   {gen_icon} candidate_generation: {gen_status}")
+            print(f"   {sel_icon} candidate_selection: {sel_status}")
             for sn, sd in data.get("scenes", {}).items():
                 icon2 = "✅" if sd["status"] == "PASS" else "❌"
-                print(f"   {icon2} {sn:<12} corner={sd.get('corner_error_normalized',1):.4f} IoU={sd.get('polygon_iou',0):.3f}")
+                bc = sd.get("best_candidate_corner_error", 1)
+                bi = sd.get("best_candidate_iou", 0)
+                sc = sd.get("selected_candidate_corner_error", 1)
+                si = sd.get("selected_candidate_iou", 0)
+                sr = sd.get("selected_candidate_rank", -1)
+                cnt = sd.get("candidate_count", 0)
+                cg = sd.get("candidate_generation", "?")
+                cs = sd.get("candidate_selection", "?")
+                print(f"   {icon2} {sn:<12} cnt={cnt} best(err={bc:.4f},iou={bi:.3f}) sel(err={sc:.4f},iou={si:.3f},rank={sr}) gen={cg} sel={cs}")
         elif gate == "demoire":
             print(f"   suppression={data.get('moire_suppression_db',0):.1f}dB (need ≥{GATE['demoire']['suppression_db_min']}dB)")
             print(f"   texture_retention={data.get('texture_retention',0):.4f} (need ≥{GATE['demoire']['texture_retention_min']})")

@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 from screenrestore.semantic import (
+    RestorationPlanner,
     SceneContext,
     SemanticAnalyzer,
-    RestorationPlanner,
     classify_scene,
 )
 from screenrestore.semantic.scene_classifier import ALL_SCENE_TYPES
@@ -135,8 +135,8 @@ def test_analysis_result_dataclass() -> None:
 
 def test_moire_ratio_not_fixed_division() -> None:
     """moire area ratio 不再固定 /10000。"""
-    from screenrestore.semantic.planner import RestorationPlanner
     from screenrestore.semantic.context import SceneContext
+    from screenrestore.semantic.planner import RestorationPlanner
 
     planner = RestorationPlanner()
     mask = np.ones((100, 100), dtype=np.uint8) * 255
@@ -156,8 +156,8 @@ def test_moire_ratio_not_fixed_division() -> None:
 
 def test_illumination_not_perspective() -> None:
     """illumination_gradient 不影响 perspective 判断。"""
-    from screenrestore.semantic.planner import RestorationPlanner
     from screenrestore.semantic.context import SceneContext
+    from screenrestore.semantic.planner import RestorationPlanner
 
     planner = RestorationPlanner()
     ctx = SceneContext(scene_type="display",
@@ -169,23 +169,23 @@ def test_illumination_not_perspective() -> None:
 
 def test_artwork_safety_gate_blocks_demoire() -> None:
     """ARTWORK 安全门禁止自动开启 demoire。"""
-    from screenrestore.semantic.planner import RestorationPlanner, AUTO_DISABLE_GATE
+    from screenrestore.semantic.planner import AUTO_DISABLE_GATE
 
     assert "demoire" in AUTO_DISABLE_GATE.get("artwork", set())
 
 
 def test_cinema_safety_gate_blocks_reflection() -> None:
     """CINEMA 安全门禁止自动开启 reflection。"""
-    from screenrestore.semantic.planner import RestorationPlanner, AUTO_DISABLE_GATE
+    from screenrestore.semantic.planner import AUTO_DISABLE_GATE
 
     assert "reflection" in AUTO_DISABLE_GATE.get("cinema", set())
 
 
 def test_scene_hint_overrides_classifier() -> None:
     """用户 scene_hint 优先于自动分类。"""
-    from screenrestore.semantic.planner import RestorationPlanner
     from screenrestore.core.presets import PresetId
     from screenrestore.semantic.context import SceneContext
+    from screenrestore.semantic.planner import RestorationPlanner
 
     planner = RestorationPlanner()
     # 语义分析说是 "display", 但用户说是 "artwork"
@@ -197,8 +197,8 @@ def test_scene_hint_overrides_classifier() -> None:
 
 def test_plan_params_serializable() -> None:
     """RestorationPlan.to_dict() 包含 params。"""
-    from screenrestore.semantic.planner import RestorationPlan, OperatorRecommendation
     from screenrestore.core.presets import PresetId
+    from screenrestore.semantic.planner import OperatorRecommendation, RestorationPlan
 
     plan = RestorationPlan(
         scene_type="artwork", scene_confidence=0.9,
@@ -215,8 +215,8 @@ def test_plan_params_serializable() -> None:
 
 def test_target_localizer_fallback() -> None:
     """无模型时 TargetLocalizer 使用几何评分 fallback。"""
-    from screenrestore.semantic.target_localizer import TargetLocalizer
     from screenrestore.semantic.context import SceneContext
+    from screenrestore.semantic.target_localizer import TargetLocalizer
 
     loc = TargetLocalizer()  # 无 CLIP backend
     img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)

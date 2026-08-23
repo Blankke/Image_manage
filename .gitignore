@@ -1,4 +1,5 @@
 .venv/
+.venv-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -22,3 +23,8 @@ plugins/*
 /*.jpeg
 validation_outputs/
 测试数据
+datasets/geometry/images/
+datasets/screen_pairs/
+datasets/reflection_pairs/
+training/**/runs/
+benchmarks/**/results/

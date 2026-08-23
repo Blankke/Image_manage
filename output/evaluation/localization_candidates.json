@@ -1,0 +1,350 @@
+{
+  "后台芭蕾": {
+    "photo_size": [
+      1707,
+      1280
+    ],
+    "candidate_count": 2,
+    "candidates": [
+      {
+        "id": 0,
+        "source": "contour",
+        "polygon": [
+          [
+            291.0,
+            299.0
+          ],
+          [
+            1074.0,
+            252.0
+          ],
+          [
+            1053.0,
+            1002.0
+          ],
+          [
+            376.0,
+            1036.0
+          ]
+        ],
+        "runtime_score": 0.997443,
+        "geometry_score": 0.997443,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.139826,
+        "polygon_iou": 0.5736,
+        "max_corner_error_px": 430.03
+      },
+      {
+        "id": 1,
+        "source": "contour",
+        "polygon": [
+          [
+            291.0,
+            299.0
+          ],
+          [
+            1074.0,
+            252.0
+          ],
+          [
+            1047.0,
+            1332.0
+          ],
+          [
+            370.0,
+            1500.0
+          ]
+        ],
+        "runtime_score": 0.994785,
+        "geometry_score": 0.994785,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.039344,
+        "polygon_iou": 0.8406,
+        "max_corner_error_px": 83.89
+      }
+    ],
+    "best_candidate": {
+      "id": 1,
+      "source": "contour",
+      "polygon": [
+        [
+          291.0,
+          299.0
+        ],
+        [
+          1074.0,
+          252.0
+        ],
+        [
+          1047.0,
+          1332.0
+        ],
+        [
+          370.0,
+          1500.0
+        ]
+      ],
+      "runtime_score": 0.994785,
+      "geometry_score": 0.994785,
+      "semantic_score": 0.0,
+      "corner_error_normalized": 0.039344,
+      "polygon_iou": 0.8406,
+      "max_corner_error_px": 83.89
+    },
+    "selected_candidate": {
+      "corner_error_normalized": 0.139826,
+      "polygon_iou": 0.5736,
+      "max_corner_error_px": 430.03,
+      "rank": 2
+    },
+    "candidate_generation": "FAIL",
+    "candidate_selection": "NOT_EVALUATED"
+  },
+  "复古街头": {
+    "photo_size": [
+      1276,
+      1702
+    ],
+    "candidate_count": 0,
+    "candidates": [],
+    "best_candidate": null,
+    "selected_candidate": {
+      "corner_error_normalized": 1.0,
+      "polygon_iou": 0.0,
+      "max_corner_error_px": 999,
+      "rank": -1
+    },
+    "candidate_generation": "FAIL",
+    "candidate_selection": "NOT_EVALUATED"
+  },
+  "电脑屏幕": {
+    "photo_size": [
+      1920,
+      1080
+    ],
+    "candidate_count": 3,
+    "candidates": [
+      {
+        "id": 0,
+        "source": "contour",
+        "polygon": [
+          [
+            144.0,
+            555.0
+          ],
+          [
+            926.0,
+            614.0
+          ],
+          [
+            962.0,
+            1164.0
+          ],
+          [
+            83.0,
+            1247.0
+          ]
+        ],
+        "runtime_score": 0.993488,
+        "geometry_score": 0.993488,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.177239,
+        "polygon_iou": 0.5064,
+        "max_corner_error_px": 573.38
+      },
+      {
+        "id": 1,
+        "source": "contour",
+        "polygon": [
+          [
+            143.0,
+            551.0
+          ],
+          [
+            929.0,
+            610.0
+          ],
+          [
+            1079.0,
+            1803.0
+          ],
+          [
+            0.0,
+            1836.0
+          ]
+        ],
+        "runtime_score": 0.991686,
+        "geometry_score": 0.991686,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.030917,
+        "polygon_iou": 0.8833,
+        "max_corner_error_px": 104.5
+      },
+      {
+        "id": 2,
+        "source": "contour",
+        "polygon": [
+          [
+            143.0,
+            551.0
+          ],
+          [
+            929.0,
+            610.0
+          ],
+          [
+            1079.0,
+            1803.0
+          ],
+          [
+            0.0,
+            1836.0
+          ]
+        ],
+        "runtime_score": 0.991686,
+        "geometry_score": 0.991686,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.030917,
+        "polygon_iou": 0.8833,
+        "max_corner_error_px": 104.5
+      }
+    ],
+    "best_candidate": {
+      "id": 1,
+      "source": "contour",
+      "polygon": [
+        [
+          143.0,
+          551.0
+        ],
+        [
+          929.0,
+          610.0
+        ],
+        [
+          1079.0,
+          1803.0
+        ],
+        [
+          0.0,
+          1836.0
+        ]
+      ],
+      "runtime_score": 0.991686,
+      "geometry_score": 0.991686,
+      "semantic_score": 0.0,
+      "corner_error_normalized": 0.030917,
+      "polygon_iou": 0.8833,
+      "max_corner_error_px": 104.5
+    },
+    "selected_candidate": {
+      "corner_error_normalized": 0.177239,
+      "polygon_iou": 0.5064,
+      "max_corner_error_px": 573.38,
+      "rank": 3
+    },
+    "candidate_generation": "FAIL",
+    "candidate_selection": "NOT_EVALUATED"
+  },
+  "红发女子": {
+    "photo_size": [
+      958,
+      1276
+    ],
+    "candidate_count": 2,
+    "candidates": [
+      {
+        "id": 0,
+        "source": "contour",
+        "polygon": [
+          [
+            708.0,
+            263.0
+          ],
+          [
+            1275.0,
+            256.0
+          ],
+          [
+            1275.0,
+            835.0
+          ],
+          [
+            595.0,
+            836.0
+          ]
+        ],
+        "runtime_score": 0.995261,
+        "geometry_score": 0.995261,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.24196,
+        "polygon_iou": 0.4035,
+        "max_corner_error_px": 684.69
+      },
+      {
+        "id": 1,
+        "source": "contour",
+        "polygon": [
+          [
+            710.0,
+            263.0
+          ],
+          [
+            1275.0,
+            256.0
+          ],
+          [
+            1275.0,
+            835.0
+          ],
+          [
+            595.0,
+            836.0
+          ]
+        ],
+        "runtime_score": 0.995097,
+        "geometry_score": 0.995097,
+        "semantic_score": 0.0,
+        "corner_error_normalized": 0.242304,
+        "polygon_iou": 0.403,
+        "max_corner_error_px": 686.68
+      }
+    ],
+    "best_candidate": {
+      "id": 0,
+      "source": "contour",
+      "polygon": [
+        [
+          708.0,
+          263.0
+        ],
+        [
+          1275.0,
+          256.0
+        ],
+        [
+          1275.0,
+          835.0
+        ],
+        [
+          595.0,
+          836.0
+        ]
+      ],
+      "runtime_score": 0.995261,
+      "geometry_score": 0.995261,
+      "semantic_score": 0.0,
+      "corner_error_normalized": 0.24196,
+      "polygon_iou": 0.4035,
+      "max_corner_error_px": 684.69
+    },
+    "selected_candidate": {
+      "corner_error_normalized": 0.24196,
+      "polygon_iou": 0.4035,
+      "max_corner_error_px": 684.69,
+      "rank": 1
+    },
+    "candidate_generation": "FAIL",
+    "candidate_selection": "NOT_EVALUATED"
+  }
+}

@@ -6,10 +6,10 @@ import cv2
 import numpy as np
 from tests.synthetic.generators import checkerboard, framed_screen
 
-from screenrestore.operators.geometry import (
+from screenrestore.geometry import (
     AspectRatioMode,
+    ClassicQuadDetector,
     InterpolationMode,
-    detect_quadrilaterals,
     estimate_output_size,
     estimate_rectified_aspect_ratio,
     order_corners,
@@ -90,7 +90,7 @@ def test_perspective_recovery_reduces_known_homography_error() -> None:
 
 def test_detector_returns_candidate_near_artificial_screen() -> None:
     image, expected = framed_screen()
-    candidates = detect_quadrilaterals(image)
+    candidates = ClassicQuadDetector().predict(image).candidates
     assert candidates
     error = min(
         float(np.mean(np.linalg.norm(candidate.corners - expected, axis=1)))
@@ -105,7 +105,7 @@ def test_detector_handles_screen_clipped_by_image_edge() -> None:
     cv2.line(image, (16, 92), (599, 92), (230, 230, 230), 3)
     cv2.line(image, (16, 92), (16, 309), (230, 230, 230), 3)
     cv2.line(image, (16, 309), (599, 309), (55, 55, 55), 2)
-    candidates = detect_quadrilaterals(image)
+    candidates = ClassicQuadDetector().predict(image).candidates
     assert candidates
     expected = np.array([[16, 92], [599, 92], [599, 309], [16, 309]], np.float32)
     error = float(np.mean(np.linalg.norm(candidates[0].corners - expected, axis=1)))
@@ -119,7 +119,7 @@ def test_detector_refines_slanted_edges_when_screen_is_clipped() -> None:
     cv2.line(image, tuple(expected[0].astype(int)), tuple(expected[1].astype(int)), (240,) * 3, 3)
     cv2.line(image, tuple(expected[0].astype(int)), tuple(expected[3].astype(int)), (240,) * 3, 3)
     cv2.line(image, tuple(expected[3].astype(int)), tuple(expected[2].astype(int)), (45,) * 3, 2)
-    candidates = detect_quadrilaterals(image)
+    candidates = ClassicQuadDetector().predict(image).candidates
     assert candidates
     error = float(np.mean(np.linalg.norm(candidates[0].corners - expected, axis=1)))
     assert error < 11.0

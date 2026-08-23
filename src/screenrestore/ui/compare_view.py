@@ -27,6 +27,7 @@ class CompareView(QWidget):
         self._layout.addWidget(self.splitter)
         self._original: np.ndarray | None = None
         self._result: np.ndarray | None = None
+        self._corner_source: np.ndarray | None = None
         self._temporary_original = False
 
     def set_images(self, original: np.ndarray, result: np.ndarray | None = None) -> None:
@@ -34,6 +35,7 @@ class CompareView(QWidget):
 
         self._original = original
         self._result = result if result is not None else original
+        self._corner_source = original
         self.original_canvas.set_image(original)
         self.result_canvas.set_image(self._result)
         self.editor.set_image(self._result)
@@ -45,6 +47,13 @@ class CompareView(QWidget):
         self.result_canvas.set_image(result, fit=False)
         if self.editor.mode == InteractionMode.BROWSE and not self._temporary_original:
             self.editor.set_image(result, fit=False)
+
+    def set_corner_source(self, image: np.ndarray) -> None:
+        """设置镜头校正后的几何编辑底图，不改变 Original 对比图。"""
+
+        self._corner_source = image
+        if self.editor.mode == InteractionMode.CORNERS:
+            self.editor.set_image(image, fit=False)
 
     @property
     def result_image(self) -> np.ndarray | None:
@@ -61,12 +70,12 @@ class CompareView(QWidget):
             self.result_canvas.fit_image()
 
     def set_corner_editing(self, enabled: bool) -> None:
-        """编辑模式始终显示未变形原图，退出后恢复结果。"""
+        """编辑模式显示 geometry 输入坐标系，退出后恢复结果。"""
 
         self._layout.setCurrentIndex(0)
         if enabled:
-            if self._original is not None:
-                self.editor.set_image(self._original)
+            if self._corner_source is not None:
+                self.editor.set_image(self._corner_source)
             self.editor.set_mode(InteractionMode.CORNERS)
         else:
             self.editor.set_mode(InteractionMode.BROWSE)

@@ -6,8 +6,9 @@
     python scripts/validate_paired_samples.py
     python scripts/validate_paired_samples.py --only 电影测试二
 
-说明：原图只用于定位测试照片里的内容边界和计算客观指标，不会作为恢复输入，也
-不会把原图像素混入输出。默认读取“测试数据”，把 PNG 和 JSON 写入
+说明：这是 ``oracle_restoration`` 基准。干净数字原图会参与实拍内容的四角定位，
+随后用于客观评分；它不会把像素混入恢复输出。该结果只能评价“已知准确四角后的
+恢复算子能力”，不能代表自动定位或端到端自动恢复。默认读取“测试数据”，把 PNG 和 JSON 写入
 “validation_outputs/paired_reference”；原始测试数据保持只读且不会上传网络。
 """
 
@@ -34,12 +35,12 @@ from screenrestore.core.presets import (
     build_default_pipeline,
     build_registry,
 )
+from screenrestore.geometry import AspectRatioMode
 from screenrestore.inference.backend import InferenceError
 from screenrestore.inference.factory import create_inference_backend
 from screenrestore.inference.model_manifest import ModelRole, load_manifest
 from screenrestore.io.image_exporter import ExportFormat, ExportOptions, export_image
 from screenrestore.io.image_loader import load_image
-from screenrestore.operators.geometry import AspectRatioMode
 from screenrestore.validation import (
     align_for_comparison,
     compare_images,
@@ -266,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
                     ai_context.metadata if ai_context is not None else None
                 ),
                 "reference_usage": (
-                    "原图仅用于定位与评分；恢复流水线的唯一图像输入是实拍图。"
+                    "oracle geometry：原图参与四角定位与评分；输出像素路径只处理实拍图。"
                 ),
             }
         )
@@ -274,7 +275,11 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "status": "ok",
-        "method": "reference-localized-observation-only-restoration",
+        "protocol": "oracle_restoration",
+        "protocol_version": 1,
+        "reference_assisted_geometry": True,
+        "may_claim_end_to_end_auto": False,
+        "method": "reference-assisted-geometry-observation-only-restoration",
         "case_count": len(reports),
         "ai": ai_status,
         "summary": _summarize_reports(reports),
