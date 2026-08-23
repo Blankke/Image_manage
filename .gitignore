@@ -19,6 +19,8 @@ plugins/*
 !plugins/.gitkeep
 *.screenrestore.json
 *.log
+# SQLite 临时会话文件；其中的冒号在 Windows 文件名中非法，不能提交。
+:memory:.ses
 /*.jpg
 /*.jpeg
 validation_outputs/
