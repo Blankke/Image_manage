@@ -15,12 +15,20 @@ from screenrestore.geometry import LocalizationDecision, TargetClass, TargetLaye
 class GeometryGroundTruth:
     """人工或离线标注得到的产品层级真值。"""
 
-    content_quad: np.ndarray
+    content_quad: np.ndarray | None
     target_class: TargetClass
     target_layer: TargetLayer = TargetLayer.CONTENT
     in_scope: bool = True
 
     def __post_init__(self) -> None:
+        if self.target_class == TargetClass.NONE:
+            if self.content_quad is not None:
+                raise ValueError("none 负样本不能提供 content_quad")
+            # 无目标样本用于检验自动拒绝，不参与四角质量与 in-scope 覆盖率。
+            object.__setattr__(self, "in_scope", False)
+            return
+        if self.content_quad is None:
+            raise ValueError("存在目标的真值必须提供 content_quad")
         quad = order_corners(self.content_quad)
         object.__setattr__(self, "content_quad", quad.copy())
 
@@ -47,33 +55,40 @@ def evaluate_geometry_decision(
     selected_nce = 1.0
     selected_iou = 0.0
     max_corner_error = float("inf")
-    if decision.proposed_corners is not None:
+    if decision.proposed_corners is not None and ground_truth.content_quad is not None:
         selected_nce, selected_iou, max_corner_error = corner_metrics(
             decision.proposed_corners,
             ground_truth.content_quad,
         )
     class_correct = decision.target_class == ground_truth.target_class
     layer_correct = decision.layer == ground_truth.target_layer
-    correct = bool(
-        decision.accepted
-        and class_correct
-        and layer_correct
-        and selected_nce <= 0.02
-        and selected_iou >= 0.90
-    )
-    candidate_metrics = []
-    for candidate in decision.candidates:
-        nce, iou, maximum = corner_metrics(candidate.corners, ground_truth.content_quad)
-        candidate_metrics.append(
-            {
-                "source": candidate.source,
-                "layer": candidate.layer.value,
-                "runtime_score": round(candidate.confidence, 6),
-                "corner_nce": round(nce, 8),
-                "quad_iou": round(iou, 8),
-                "max_corner_error_px": round(maximum, 4),
-            }
+    if ground_truth.target_class == TargetClass.NONE:
+        # hard negative 只要求无人值守路径停止。强行要求分类头恰好输出 none 会把
+        # “因低置信度而正确拒绝”的安全行为误判为失败。
+        correct = not decision.accepted
+        layer_correct = True
+    else:
+        correct = bool(
+            decision.accepted
+            and class_correct
+            and layer_correct
+            and selected_nce <= 0.02
+            and selected_iou >= 0.90
         )
+    candidate_metrics = []
+    if ground_truth.content_quad is not None:
+        for candidate in decision.candidates:
+            nce, iou, maximum = corner_metrics(candidate.corners, ground_truth.content_quad)
+            candidate_metrics.append(
+                {
+                    "source": candidate.source,
+                    "layer": candidate.layer.value,
+                    "runtime_score": round(candidate.confidence, 6),
+                    "corner_nce": round(nce, 8),
+                    "quad_iou": round(iou, 8),
+                    "max_corner_error_px": round(maximum, 4),
+                }
+            )
     candidate_metrics.sort(key=lambda item: (item["corner_nce"], -item["quad_iou"]))
     return {
         "accepted": decision.accepted,
@@ -95,11 +110,19 @@ def evaluate_geometry_decision(
 def aggregate_geometry_results(
     results: list[dict[str, Any]],
     gate: GeometryGate | None = None,
+    group_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """聚合选择正确率、覆盖率、层级错误与尾部几何质量。"""
+    """聚合选择正确率、覆盖率、层级错误与尾部几何质量。
+
+    ``minimum_samples`` 的发布含义是独立 group 数，而非同一连拍的图片数量。旧调用方
+    未提供 ``group_ids`` 时维持一条结果视作一个独立 group 的 smoke 兼容语义。
+    """
 
     gate = gate or GeometryGate()
     sample_count = len(results)
+    if group_ids is not None and len(group_ids) != sample_count:
+        raise ValueError("group_ids 长度必须与几何结果数量一致")
+    independent_group_count = len(set(group_ids)) if group_ids is not None else sample_count
     accepted = [item for item in results if item["accepted"]]
     in_scope = [item for item in results if item["in_scope"]]
     accepted_correct = [item for item in accepted if item["correct"]]
@@ -113,7 +136,7 @@ def aggregate_geometry_results(
     iou_median = float(np.median(accepted_iou)) if accepted_iou.size else 0.0
     iou_p05 = float(np.percentile(accepted_iou, 5)) if accepted_iou.size else 0.0
     gates = {
-        "minimum_samples": sample_count >= gate.minimum_samples,
+        "minimum_samples": independent_group_count >= gate.minimum_samples,
         "accepted_precision": accepted_precision >= gate.accepted_precision_min,
         "in_scope_coverage": coverage >= gate.in_scope_coverage_min,
         "wrong_layer_rate": wrong_layer_rate <= gate.wrong_layer_rate_max,
@@ -124,6 +147,7 @@ def aggregate_geometry_results(
     return {
         "status": "PASS" if all(gates.values()) else "FAIL",
         "sample_count": sample_count,
+        "independent_group_count": independent_group_count,
         "accepted_count": len(accepted),
         "accepted_precision": round(accepted_precision, 8),
         "in_scope_coverage": round(coverage, 8),

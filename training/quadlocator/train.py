@@ -16,6 +16,7 @@ import argparse
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -30,22 +31,43 @@ from training.quadlocator.model import QuadLocatorS
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        help="manifest 中 image 的相对根目录；标准外部数据清单应显式提供",
+    )
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--width-multiplier", type=float, default=1.0)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
+    parser.add_argument("--train-samples", type=int, default=0, help="训练样本上限，0 表示全部")
+    parser.add_argument("--validation-samples", type=int, default=0, help="验证样本上限，0 表示全部")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--seed", type=int, default=20260823)
     args = parser.parse_args(argv)
     if args.epochs < 1 or args.batch_size < 1:
         raise ValueError("epochs 和 batch-size 必须大于 0")
+    if args.train_samples < 0 or args.validation_samples < 0:
+        raise ValueError("样本上限不能为负数")
     _seed_everything(args.seed)
     device = _device(args.device)
-    train_data = QuadDataset(args.manifest, split="train", image_size=args.image_size)
-    validation_data = QuadDataset(args.manifest, split="validation", image_size=args.image_size)
+    train_data = QuadDataset(
+        args.manifest,
+        split="train",
+        image_size=args.image_size,
+        dataset_root=args.dataset_root,
+        max_samples=args.train_samples,
+    )
+    validation_data = QuadDataset(
+        args.manifest,
+        split="validation",
+        image_size=args.image_size,
+        dataset_root=args.dataset_root,
+        max_samples=args.validation_samples,
+    )
     train_loader = DataLoader(
         train_data,
         batch_size=args.batch_size,
@@ -63,6 +85,25 @@ def main(argv: list[str] | None = None) -> int:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     output_directory = args.output_directory.expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
+    started_at = time.monotonic()
+    # 每次训练将可比较的实验元数据独立落盘；不记录图片内容，也不把运行产物放入仓库。
+    run_metadata = {
+        "dataset_manifest": str(args.manifest.expanduser().resolve()),
+        "dataset_root": str(train_data.root),
+        "train_samples": len(train_data),
+        "validation_samples": len(validation_data),
+        "architecture": "QuadLocatorS",
+        "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "image_size": args.image_size,
+        "batch_size": args.batch_size,
+        "epochs": args.epochs,
+        "learning_rate": args.learning_rate,
+        "device": str(device),
+    }
+    (output_directory / "run.json").write_text(
+        json.dumps(run_metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     history: list[dict[str, float | int | str]] = []
     best_validation = float("inf")
     for epoch in range(1, args.epochs + 1):
@@ -84,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             "width_multiplier": args.width_multiplier,
             "image_size": args.image_size,
             "class_order": ["artwork", "postcard", "screen", "none"],
+            "parameter_count": run_metadata["parameter_count"],
             "state_dict": model.state_dict(),
             "epoch": epoch,
             "validation_loss": validation_loss,
@@ -94,6 +136,12 @@ def main(argv: list[str] | None = None) -> int:
             torch.save(checkpoint, output_directory / "best.pt")
     (output_directory / "history.json").write_text(
         json.dumps(history, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    run_metadata["wall_time_seconds"] = round(time.monotonic() - started_at, 4)
+    run_metadata["best_validation_loss"] = best_validation
+    (output_directory / "run.json").write_text(
+        json.dumps(run_metadata, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return 0

@@ -26,9 +26,17 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         split: str,
         image_size: int = 640,
         heatmap_sigma: float = 2.5,
+        dataset_root: str | Path | None = None,
+        max_samples: int = 0,
     ) -> None:
         self.manifest_path = Path(manifest_path).expanduser().resolve()
-        self.root = self.manifest_path.parent
+        # 标准清单的 image 相对于显式数据根目录，避免 manifests/ 与真实图片目录
+        # 分离时出现隐式 ../ 路径，同时继续拒绝任何越出用户指定数据根的引用。
+        self.root = (
+            Path(dataset_root).expanduser().resolve()
+            if dataset_root is not None
+            else self.manifest_path.parent
+        )
         self.image_size = image_size
         self.output_size = image_size // 4
         self.heatmap_sigma = heatmap_sigma
@@ -39,6 +47,13 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         ]
         if not self.records:
             raise ValueError(f"manifest 中没有 split={split} 的样本")
+        if max_samples < 0:
+            raise ValueError("max_samples 不能为负数")
+        if max_samples and max_samples < len(self.records):
+            selected = np.random.default_rng(20260827).choice(
+                len(self.records), size=max_samples, replace=False
+            )
+            self.records = [self.records[int(index)] for index in sorted(selected)]
 
     def __len__(self) -> int:
         return len(self.records)

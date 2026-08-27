@@ -94,3 +94,20 @@ def test_training_letterbox_preserves_non_square_quad_geometry() -> None:
             dtype=np.float32,
         ),
     )
+
+
+def test_dataset_can_limit_samples_for_reproducible_smoke_runs(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from training.quadlocator.dataset import QuadDataset
+    from training.quadlocator.generate_synthetic import main as generate_synthetic
+
+    data_directory = tmp_path / "quad-data"
+    assert generate_synthetic(["--output-directory", str(data_directory), "--count", "12", "--size", "128"]) == 0
+
+    dataset = QuadDataset(
+        data_directory / "manifest.jsonl",
+        split="train",
+        image_size=128,
+        max_samples=3,
+    )
+
+    assert len(dataset) == 3

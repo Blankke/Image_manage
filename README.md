@@ -125,7 +125,72 @@ python -m training.quadlocator.export_onnx --checkpoint /tmp/quad-run/best.pt --
 python -m benchmarks.geometry_e2e.run --quad-model /tmp/quadlocator-s.onnx
 ```
 
+SmartDoc 等真实数据接入标准 `geometry.schema.json` JSONL 后，可将照片目录与清单一同
+传入。基准先扫描并预测该目录中的照片，全部预测冻结后才读取清单里的类别与四角真值；
+`test` split 默认用于评分，`group_id` 按独立 group 计入 release 最低样本数：
+
+```bash
+python -m benchmarks.geometry_e2e.run \
+  --data-directory "$SCREENRESTORE_DATA_ROOT/geometry/smartdoc/frames" \
+  --manifest "$SCREENRESTORE_DATA_ROOT/manifests/smartdoc.geometry.jsonl" \
+  --dataset-root "$SCREENRESTORE_DATA_ROOT" \
+  --quad-model /tmp/quadlocator-s.onnx
+```
+
+同一清单用于训练时也必须指定数据根，避免清单位于 `manifests/` 目录时错误地把图片
+解析为其子目录：
+
+```bash
+python -m training.quadlocator.train \
+  --manifest "$SCREENRESTORE_DATA_ROOT/manifests/smartdoc.geometry.jsonl" \
+  --dataset-root "$SCREENRESTORE_DATA_ROOT" \
+  --output-directory "$SCREENRESTORE_RUN_ROOT/geometry/smartdoc"
+```
+
 未训练的 smoke checkpoint 只验证接口，不代表模型质量。发布 gate 至少需要 100 个独立实拍 group；当前四场景仅作回归烟测。
+
+## P1 数据训练入口
+
+数据根的 P1 训练契约已固定：SmartDoc 的 `content_quad` 仅训练 QuadLocator；DIV2K HR
+仅训练 Fidelity 的受约束恢复；无 GT 的 private 图片只可显式加入 identity 保护，不能伪造
+四角或 clean target。DIV2K wild 是真实 x4 退化数据，记录在清单的 `wild_x4_images` 字段，
+当前用于真实退化域差审计，不与同尺寸 Fidelity 训练混合。
+
+最简单的 MPS 烟测入口：
+
+```bash
+export SCREENRESTORE_DATA_ROOT="$HOME/screenrestore-data"
+export SCREENRESTORE_RUN_ROOT="$HOME/screenrestore-runs"
+bash scripts/train_p1.sh smoke --with-private-identity --with-wild-audit
+```
+
+`smoke` 使用有限样本验证数据、MPS、checkpoint 与 ONNX；正式基线改为 `baseline`。运行结束
+会在 `$SCREENRESTORE_RUN_ROOT/<run>/` 生成几何与恢复 checkpoint、ONNX、`run.json`、训练历史
+和 DIV2K 指标。几何 ONNX 可直接供 CLI 的 `--quad-model` 使用；恢复 ONNX 的本地模型清单、
+私有无 GT 审计及全部参数说明见 [训练说明](docs/TRAINING.md)。
+
+第二阶段的专项训练采用统一配对清单契约。准备真实去噪、去模糊、色彩/光照、反光、去摩尔纹
+或超分数据后，先执行审计，确保配对尺寸、图像可解码性以及 `group_id` / `capture_session` 不会
+跨 split 泄漏：
+
+```bash
+source .venv/bin/activate
+which python
+python scripts/audit_restoration_manifest.py \
+  --data-root "$SCREENRESTORE_DATA_ROOT" \
+  --manifest "$SCREENRESTORE_DATA_ROOT/manifests/<专项>.restoration.jsonl"
+```
+
+每个 Fidelity checkpoint 都应额外运行固定退化切片评测，再决定光度、噪声、模糊或压缩退化的
+采样比例和损失权重；不得只依据混合验证集的总分调参：
+
+```bash
+python -m training.restoration.evaluate_slices \
+  --checkpoint "$SCREENRESTORE_RUN_ROOT/<run>/restoration/best.pt" \
+  --hr-directory "$SCREENRESTORE_DATA_ROOT/superres/div2k/DIV2K_valid_HR" \
+  --output "$SCREENRESTORE_RUN_ROOT/<run>/restoration/evaluation-slices.json" \
+  --samples 100 --device auto
+```
 
 DocAligner 的上游工具依赖较多，建议在独立 benchmark venv 中复现，不进入核心安装：
 

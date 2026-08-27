@@ -102,6 +102,31 @@ def test_service_rejects_low_confidence_instead_of_forcing_quad() -> None:
     assert decision.proposed_corners is not None
 
 
+def test_service_rejects_outer_prediction_that_does_not_contain_content() -> None:
+    from screenrestore.geometry.detector import _layer_confidence
+
+    image, _expected, coarse = _sharp_target()
+    # outer 头错落在 content 内部时，不能根据面积或矩形度继续自动接受。
+    invalid_outer = np.array([[250, 160], [390, 160], [390, 280], [250, 280]], np.float32)
+    mask = np.ones((32, 32), np.float32)
+    assert _layer_confidence(coarse, invalid_outer, mask) < 0.58
+    prediction = QuadPrediction(
+        content_quad=coarse,
+        outer_quad=invalid_outer,
+        corner_confidences=(0.95, 0.95, 0.95, 0.95),
+        presence_confidence=0.97,
+        target_class=TargetClass.ARTWORK,
+        class_confidence=0.94,
+        layer_confidence=0.0,
+        backend="test_quadlocator",
+    )
+
+    decision = AutomaticGeometryService(_FixedDetector(prediction)).localize(image)
+
+    assert decision.status == LocalizationStatus.REJECTED
+    assert RejectionReason.LAYER_AMBIGUOUS in decision.rejection_reasons
+
+
 def test_classic_detector_never_claims_content_layer_for_unattended_acceptance() -> None:
     image, _expected, _coarse = _sharp_target()
 

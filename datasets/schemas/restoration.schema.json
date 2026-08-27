@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://screenrestore.local/schemas/restoration.schema.json",
+  "title": "ScreenRestore 专项恢复配对样本",
+  "description": "用于去噪、去模糊、光度校正、反光、去摩尔纹和保守超分的单条 JSONL 记录。图像路径相对 SCREENRESTORE_DATA_ROOT；同一 group_id 不得跨 split。",
+  "type": "object",
+  "required": ["sample_id", "task", "split", "group_id", "capture_session", "input_image", "target_image", "source", "license"],
+  "properties": {
+    "sample_id": {"type": "string", "minLength": 1},
+    "task": {
+      "type": "string",
+      "enum": ["denoise", "deblur", "photometric", "reflection_single", "reflection_multiframe", "demoire", "super_resolution"]
+    },
+    "split": {"type": "string", "enum": ["train", "validation", "test"]},
+    "group_id": {"type": "string", "minLength": 1},
+    "capture_session": {"type": "string", "minLength": 1},
+    "input_image": {"type": "string", "minLength": 1},
+    "target_image": {"type": "string", "minLength": 1},
+    "reflection_mask": {"type": ["string", "null"]},
+    "validity_mask": {"type": ["string", "null"]},
+    "observed_frames": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "target_metadata": {"type": "object"},
+    "source": {"type": "string", "minLength": 1},
+    "license": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"task": {"const": "reflection_multiframe"}}},
+      "then": {"required": ["observed_frames"]}
+    }
+  ],
+  "additionalProperties": false
+}

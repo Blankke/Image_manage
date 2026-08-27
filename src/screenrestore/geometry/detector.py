@@ -301,15 +301,34 @@ def _layer_confidence(
     outer_quad: np.ndarray | None,
     content_mask: np.ndarray,
 ) -> float:
+    """组合内容分割与显式 content/outer 预测的一致性证据。
+
+    面积大小不能用来推断画芯/卡纸/画框语义。这里只使用模型内容 mask，以及模型已
+    明确输出两个层级后应满足的几何包含关系；outer 与 content 矛盾时必须降低置信度。
+    """
+
     if content_quad is None:
         return 0.0
     mask_evidence = float(np.clip(np.mean(content_mask > 0.5) * 4.0, 0.0, 1.0))
     if outer_quad is None:
         return float(0.65 + 0.25 * mask_evidence)
-    content_area = abs(float(cv2.contourArea(content_quad)))
-    outer_area = abs(float(cv2.contourArea(outer_quad)))
-    hierarchy_gap = float(np.clip(1.0 - content_area / max(outer_area, 1e-8), 0.0, 1.0))
-    return float(np.clip(0.45 + 0.30 * mask_evidence + 0.25 * hierarchy_gap, 0.0, 1.0))
+    containment = _content_containment_score(content_quad, outer_quad)
+    return float(np.clip((0.50 + 0.30 * mask_evidence) * containment, 0.0, 1.0))
+
+
+def _content_containment_score(content_quad: np.ndarray, outer_quad: np.ndarray) -> float:
+    """衡量 content 四角是否落在显式 outer 内，容许热图量化造成的微小越界。"""
+
+    outer = order_corners(outer_quad).reshape(-1, 1, 2)
+    content = order_corners(content_quad)
+    diagonal = max(1.0, float(np.linalg.norm(outer_quad.max(axis=0) - outer_quad.min(axis=0))))
+    tolerance = diagonal * 0.012
+    distances = np.asarray(
+        [cv2.pointPolygonTest(outer, tuple(float(value) for value in point), True) for point in content],
+        dtype=np.float32,
+    )
+    # 四角全部在边界内为 1；在一条热图像素带外时线性衰减，超过容差立即归零。
+    return float(np.mean(np.clip((distances + tolerance) / tolerance, 0.0, 1.0)))
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
