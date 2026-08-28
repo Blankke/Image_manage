@@ -161,13 +161,14 @@ python -m training.quadlocator.train \
 ```bash
 export SCREENRESTORE_DATA_ROOT="$HOME/screenrestore-data"
 export SCREENRESTORE_RUN_ROOT="$HOME/screenrestore-runs"
-bash scripts/train_p1.sh smoke --with-private-identity --with-wild-audit
+bash scripts/train_p1.sh smoke --with-private-identity
 ```
 
-`smoke` 使用有限样本验证数据、MPS、checkpoint 与 ONNX；正式基线改为 `baseline`。运行结束
-会在 `$SCREENRESTORE_RUN_ROOT/<run>/` 生成几何与恢复 checkpoint、ONNX、`run.json`、训练历史
-和 DIV2K 指标。几何 ONNX 可直接供 CLI 的 `--quad-model` 使用；恢复 ONNX 的本地模型清单、
-私有无 GT 审计及全部参数说明见 [训练说明](docs/TRAINING.md)。
+`smoke` 使用有限样本验证数据、MPS、checkpoint 与 ONNX；不带参数的 `full` 才是正式全量
+入口，依次训练 SmartDoc 几何、DIV2K 同尺寸 Fidelity、DIV2K x2 bicubic 超分和 DIV2K wild
+x4 超分。运行结束会在 `$SCREENRESTORE_RUN_ROOT/<run>/` 生成各阶段 checkpoint、ONNX、`run.json`
+和训练历史。几何 ONNX 可直接供 CLI 的 `--quad-model` 使用；恢复 ONNX 的本地模型清单、私有
+无 GT 审计及全部参数说明见 [训练说明](docs/TRAINING.md)。
 
 第二阶段的专项训练采用统一配对清单契约。准备真实去噪、去模糊、色彩/光照、反光、去摩尔纹
 或超分数据后，先执行审计，确保配对尺寸、图像可解码性以及 `group_id` / `capture_session` 不会

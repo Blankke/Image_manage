@@ -20,16 +20,17 @@ which python
 export SCREENRESTORE_DATA_ROOT="$HOME/screenrestore-data"
 export SCREENRESTORE_RUN_ROOT="$HOME/screenrestore-runs"
 
-# 小规模端到端 smoke；private 只加入 identity，wild 只进行配对审计。
-bash scripts/train_p1.sh smoke --with-private-identity --with-wild-audit
+# 小规模端到端 smoke；会依次验证几何、同尺寸恢复、x2 与 wild-x4 超分。
+bash scripts/train_p1.sh smoke --with-private-identity
 
-# 使用完整 SmartDoc 与 DIV2K 的正式基线。
-bash scripts/train_p1.sh baseline --with-private-identity --with-wild-audit
+# 使用所有已下载数据的正式分阶段训练；也可省略 full。
+bash scripts/train_p1.sh full --with-private-identity
 ```
 
 `smoke` 的目标是检查 GPU/MPS、数据解析、checkpoint、ONNX 和指标链路；不能作为质量结论。
-`baseline` 先完成 SmartDoc 几何训练，再完成 DIV2K Fidelity 训练，同一时间只运行一个 MPS
-训练任务。私有图片必须由操作者显式传入 `--with-private-identity`，脚本默认不读取它。
+`full` 先完成 SmartDoc 几何训练，再分别完成 DIV2K Fidelity、x2 bicubic 超分与 wild-x4
+超分，同一时间只运行一个 MPS 训练任务。私有图片必须由操作者显式传入
+`--with-private-identity`，脚本默认不读取它。
 
 ## 第二阶段：专项数据与调参
 
@@ -118,5 +119,5 @@ python scripts/audit_unlabeled_geometry.py \
 ```
 
 报告只含接受数、类别计数与拒绝原因，不含图像名称或像素。DIV2K wild 配对记录保存在
-`manifests/div2k.restoration.jsonl` 的 `wild_x4_images`；当前版本不启动 x4 SR 训练。产品
-优先完成可验证的 x2 路线后，再以独立协议训练和评估 wild-x4。
+`manifests/div2k.restoration.jsonl` 的 `wild_x4_images`；`full` 会把 x2 和 wild-x4 分别训练为
+独立的保守超分模型，禁止混成同一个数据源或权重。
