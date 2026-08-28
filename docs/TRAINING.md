@@ -1,5 +1,8 @@
 # P1 训练与模型使用
 
+2026-08-28 正式 run 的训练指标、SmartDoc e2e gate、private 无 GT 效果图与历史产物清理记录见
+[`P1_RESULTS.md`](P1_RESULTS.md)。
+
 ## 数据角色
 
 | 数据 | 可用于 | 不可用于 |
