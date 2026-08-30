@@ -11,6 +11,7 @@ from .rectify import estimate_aspect, order_corners
 from .types import (
     LocalizationDecision,
     LocalizationStatus,
+    QuadPrediction,
     RejectionReason,
     TargetClass,
     TargetLayer,
@@ -53,7 +54,7 @@ class AutomaticGeometryService:
                 backend=prediction.backend,
                 rejection_reasons=(RejectionReason.NO_CANDIDATE,),
                 candidates=prediction.candidates,
-                diagnostics={"candidate_count": len(prediction.candidates)},
+                diagnostics=_prediction_diagnostics(prediction),
             )
         try:
             coarse = order_corners(prediction.content_quad)
@@ -70,6 +71,7 @@ class AutomaticGeometryService:
                 backend=prediction.backend,
                 rejection_reasons=(RejectionReason.INVALID_QUAD,),
                 candidates=prediction.candidates,
+                diagnostics=_prediction_diagnostics(prediction),
             )
         if not quadrilateral_is_valid(coarse, image_rgb.shape):
             return LocalizationDecision(
@@ -84,6 +86,7 @@ class AutomaticGeometryService:
                 backend=prediction.backend,
                 rejection_reasons=(RejectionReason.INVALID_QUAD,),
                 candidates=prediction.candidates,
+                diagnostics=_prediction_diagnostics(prediction),
             )
         refinement = refine_quad_edges(
             image_rgb,
@@ -134,3 +137,16 @@ class AutomaticGeometryService:
             candidates=prediction.candidates,
             diagnostics=diagnostics,
         )
+
+
+def _prediction_diagnostics(prediction: QuadPrediction) -> dict[str, object]:
+    """即使没有可用四角，也保留各 head 的有限诊断供拒绝预览与数据回流。"""
+
+    return {
+        "presence_confidence": round(float(prediction.presence_confidence), 6),
+        "outer_presence_confidence": round(float(prediction.outer_presence_confidence), 6),
+        "class_confidence": round(float(prediction.class_confidence), 6),
+        "minimum_corner_confidence": round(float(min(prediction.corner_confidences)), 6),
+        "layer_confidence": round(float(prediction.layer_confidence), 6),
+        "candidate_count": len(prediction.candidates),
+    }

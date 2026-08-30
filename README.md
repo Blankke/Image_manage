@@ -170,6 +170,48 @@ x4 超分。运行结束会在 `$SCREENRESTORE_RUN_ROOT/<run>/` 生成各阶段 
 和训练历史。几何 ONNX 可直接供 CLI 的 `--quad-model` 使用；恢复 ONNX 的本地模型清单、私有
 无 GT 审计及全部参数说明见 [训练说明](docs/TRAINING.md)。
 
+P2 只修复和重训 geometry，不会重跑 Fidelity 或 super-resolution。新契约增加显式
+`outer_presence_logits`，旧 6-output P1 ONNX 会被运行时明确拒绝。数据准备、private 标注、
+合成数据与阶段清单先独立完成，再由操作者逐阶段启动：
+
+```bash
+source .venv/bin/activate
+which python
+export SCREENRESTORE_DATA_ROOT="$HOME/screenrestore-data"
+export SCREENRESTORE_RUN_ROOT="$HOME/screenrestore-runs"
+
+python scripts/prepare_p2_geometry_data.py --dataset all \
+  --data-root "$SCREENRESTORE_DATA_ROOT" --met-count 1500
+python scripts/label_private_geometry.py \
+  --data-root "$SCREENRESTORE_DATA_ROOT" \
+  --image-directory "$SCREENRESTORE_DATA_ROOT/private" \
+  --output "$SCREENRESTORE_DATA_ROOT/private/geometry.annotations.jsonl"
+python -m training.quadlocator.generate_synthetic \
+  --output-directory "$SCREENRESTORE_DATA_ROOT/geometry/synthetic" \
+  --count 24000 --size 640 --negative-ratio 0.25 \
+  --content-directory "$SCREENRESTORE_DATA_ROOT/textures/met-open-access/images" \
+  --content-directory "$SCREENRESTORE_DATA_ROOT/superres/div2k/DIV2K_train_HR" \
+  --background-directory "$SCREENRESTORE_DATA_ROOT/backgrounds/coco/val2017" \
+  --background-directory "$SCREENRESTORE_DATA_ROOT/superres/div2k/DIV2K_train_HR"
+python scripts/build_p2_geometry_manifests.py --data-root "$SCREENRESTORE_DATA_ROOT"
+
+export SCREENRESTORE_RUN_NAME="p2-geometry-w1-$(date +%Y%m%d-%H%M%S)"
+export P2_DEVICE=mps
+bash scripts/train_p2_geometry.sh preflight
+bash scripts/train_p2_geometry.sh stage-a
+bash scripts/train_p2_geometry.sh stage-b
+bash scripts/train_p2_geometry.sh stage-c
+bash scripts/train_p2_geometry.sh stage-d
+```
+
+合成器会在生成前固定拆分公开内容与背景纹理，同一源作品或场景只进入一个 split；private
+层级不确定样本按自动拒绝语义提供 presence 负监督。
+
+每个训练 stage 自动导出 7-output ONNX、运行 SmartDoc e2e 诊断，并生成 public validation
+至少 50 张及 private validation/test 全量 overlay。Stage D 冻结权重，只读取 validation
+校准置信度；test 不参与阈值或模型选择。完整 P2 说明见 [训练说明](docs/TRAINING.md)，正式训练与
+验收结论见 [P2 自动几何结果](docs/P2_GEOMETRY_RESULTS.md)。
+
 第二阶段的专项训练采用统一配对清单契约。准备真实去噪、去模糊、色彩/光照、反光、去摩尔纹
 或超分数据后，先执行审计，确保配对尺寸、图像可解码性以及 `group_id` / `capture_session` 不会
 跨 split 泄漏：

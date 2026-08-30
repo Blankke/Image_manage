@@ -36,6 +36,18 @@ MCNN `468b2677`、UnDeM `73cb9406`、NAFNet `2b4af71e`、Real-ESRGAN
 | [BIPNet](https://github.com/akshaydudhane16/BIPNet) | 多帧恢复 | 未发现明确许可证 | 仅理解论文思路，禁止复制代码 |
 | [flicker_remover](https://github.com/flyeyesport/flicker_remover) | 多帧闪烁校正 | 未发现明确许可证 | 仅理解论文思路，禁止复制代码 |
 
+## P2 geometry 数据参考
+
+| 数据源 | 官方入口 | 许可核查 | 本项目选择规则 |
+| --- | --- | --- | --- |
+| MIDV-500 | `ftp://smartengines.com/midv-500/` | 官方 `license.txt` 为 CC-BY-SA-2.5 | 固定 10/50 document types；同一 document 与相邻视频帧不跨 split |
+| MIDV-Holo | `ftp://smartengines.com/midv-holo/` 与 SmartEngines 官方仓库 | 官方 `license.txt` 为 CC-BY-SA-2.5，并提示 Generated Photos attribution | 按 sample kind×A-E 光照×设备×ID/passport 每格固定抽取 clip；同一虚构 document 的 original/fraud 变体同组 |
+| The Met Collection API | `https://metmuseum.github.io/` | Open Access 数据为 CC0；图像逐对象要求 `isPublicDomain=true` | painting/print/photograph 轮转，要求 primary image，保存 object ID 与来源 metadata |
+| COCO 2017 | `https://cocodataset.org/#download` | 数据集条款与 image-level Flickr license 分别适用 | 仅官方 val2017 5K 背景池，不下载 18 GB train2017 |
+
+上述数据、归档、来源 metadata 和生成后的合成图片均只保存在
+`$SCREENRESTORE_DATA_ROOT`，由 `.gitignore` 排除。仓库仅维护 schema、下载与清单生成规则。
+
 ## 使用原则
 
 - 已有明确许可证不等于自动引入：真正复制、改写或分发代码时仍记录文件级来源、

@@ -30,8 +30,37 @@
     "outer_quad": {"$ref": "#/$defs/nullable_quad"},
     "visible": {"type": "boolean"},
     "occlusion": {"type": "number", "minimum": 0, "maximum": 1},
-    "glare_level": {"enum": ["none", "light", "medium", "strong"]}
+    "glare_level": {"enum": ["none", "light", "medium", "strong"]},
+    "source": {"type": "string", "minLength": 1},
+    "scene_type": {"type": "string", "minLength": 1},
+    "in_scope": {"type": "boolean"},
+    "ambiguous": {"type": "boolean"},
+    "unusable": {"type": "boolean"}
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "scene_type": {
+            "enum": ["gallery_multi_target", "multiple_artworks", "multiple_equally_plausible"]
+          }
+        },
+        "required": ["scene_type"]
+      },
+      "then": {
+        "required": ["ambiguous", "in_scope"],
+        "properties": {
+          "present": {"const": false},
+          "target_class": {"const": "none"},
+          "content_quad": {"type": "null"},
+          "outer_quad": {"type": "null"},
+          "visible": {"const": false},
+          "ambiguous": {"const": true},
+          "in_scope": {"const": false}
+        }
+      }
+    }
+  ],
   "$defs": {
     "point": {
       "type": "array",

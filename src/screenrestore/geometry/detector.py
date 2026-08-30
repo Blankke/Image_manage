@@ -79,7 +79,8 @@ class OnnxQuadDetector:
 
     权威模型契约：输入 ``image`` 为 ``B×3×H×W`` RGB float32 [0,1]；输出依次为
     ``content_corner_heatmaps``、``outer_corner_heatmaps``、``content_mask_logits``、
-    ``boundary_logits``、``presence_logits``、``class_logits``。输出名可通过构造参数覆盖。
+    ``boundary_logits``、``presence_logits``、``outer_presence_logits``、``class_logits``。
+    输出名可通过构造参数覆盖；旧 6-output 模型会在初始化时明确失败。
     """
 
     DEFAULT_OUTPUTS = (
@@ -88,6 +89,7 @@ class OnnxQuadDetector:
         "content_mask_logits",
         "boundary_logits",
         "presence_logits",
+        "outer_presence_logits",
         "class_logits",
     )
     CLASS_ORDER = (
@@ -103,13 +105,18 @@ class OnnxQuadDetector:
         *,
         input_size: int | None = None,
         providers: list[str] | None = None,
-        output_names: tuple[str, str, str, str, str, str] = DEFAULT_OUTPUTS,
+        output_names: tuple[str, str, str, str, str, str, str] = DEFAULT_OUTPUTS,
+        outer_presence_threshold: float = 0.5,
     ) -> None:
         if input_size is not None and (input_size < 128 or input_size % 32):
             raise ValueError("QuadLocator 输入尺寸必须不小于 128 且为 32 的倍数")
+        if len(output_names) != 7:
+            raise RuntimeError("QuadLocator ONNX 必须使用完整 7-output P2 契约")
         path = Path(model_path).expanduser().resolve()
         if not path.is_file():
             raise ValueError(f"QuadLocator 模型不存在：{path}")
+        if not 0.0 < outer_presence_threshold < 1.0:
+            raise ValueError("outer presence 阈值必须位于 0..1")
         try:
             import onnxruntime as ort
         except ImportError as exc:
@@ -118,6 +125,8 @@ class OnnxQuadDetector:
             ort.disable_telemetry_events()
         self.model_path = path
         self.output_names = output_names
+        # 该值是待独立验证集校准的保守起点，不能从 test coverage 反推。
+        self.outer_presence_threshold = outer_presence_threshold
         self._session = ort.InferenceSession(
             str(path),
             providers=providers or ["CPUExecutionProvider"],
@@ -137,7 +146,10 @@ class OnnxQuadDetector:
         available_outputs = {output.name for output in self._session.get_outputs()}
         missing = set(output_names) - available_outputs
         if missing:
-            raise RuntimeError(f"QuadLocator ONNX 缺少输出：{sorted(missing)}")
+            raise RuntimeError(
+                "QuadLocator ONNX 模型契约不匹配：需要 7-output P2 契约，"
+                f"缺少输出 {sorted(missing)}"
+            )
 
     def predict(
         self,
@@ -146,17 +158,32 @@ class OnnxQuadDetector:
     ) -> QuadPrediction:
         tensor, transform = _letterbox_tensor(image_rgb, self.input_size)
         raw = self._session.run(list(self.output_names), {self._input_name: tensor})
-        content_heatmaps, outer_heatmaps, mask_logits, boundary_logits, presence, classes = raw
+        (
+            content_heatmaps,
+            outer_heatmaps,
+            mask_logits,
+            boundary_logits,
+            presence,
+            outer_presence,
+            classes,
+        ) = raw
         content_quad, corner_confidences = _decode_corner_heatmaps(
             content_heatmaps,
             transform,
             image_rgb.shape,
         )
-        outer_quad, _outer_confidences = _decode_corner_heatmaps(
-            outer_heatmaps,
-            transform,
-            image_rgb.shape,
+        outer_presence_confidence = float(
+            _sigmoid(np.asarray(outer_presence, np.float32)).reshape(-1)[0]
         )
+        outer_quad: np.ndarray | None = None
+        _outer_confidences = (0.0, 0.0, 0.0, 0.0)
+        # outer presence 是热图解码的硬门。门未通过时，随机峰值不会进入候选或层级检查。
+        if outer_presence_confidence >= self.outer_presence_threshold:
+            outer_quad, _outer_confidences = _decode_corner_heatmaps(
+                outer_heatmaps,
+                transform,
+                image_rgb.shape,
+            )
         class_probabilities = _softmax(np.asarray(classes, dtype=np.float32).reshape(-1))
         class_index = int(np.argmax(class_probabilities))
         target_class = self.CLASS_ORDER[class_index]
@@ -191,6 +218,7 @@ class OnnxQuadDetector:
             outer_quad=outer_quad,
             corner_confidences=corner_confidences,
             presence_confidence=float(_sigmoid(np.asarray(presence, np.float32)).reshape(-1)[0]),
+            outer_presence_confidence=outer_presence_confidence,
             target_class=target_class,
             class_confidence=class_confidence,
             layer_confidence=_layer_confidence(content_quad, outer_quad, content_mask),

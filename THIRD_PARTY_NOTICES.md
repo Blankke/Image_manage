@@ -23,6 +23,21 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 
 可选 `onnxruntime` 通常为 MIT；OpenVINO 为 Apache-2.0。它们默认不安装、不导入，也不随核心包分发。真正分发可选运行时或模型前必须对选定版本和权重另行核查。
 
+## P2 几何训练数据（本地下载，不进入仓库）
+
+| 数据 | 用途 | 许可证/权利边界 | 本项目处理 |
+| --- | --- | --- | --- |
+| MIDV-500 | 移动端文档四边形、透视、模糊、背景与 partial reject | 数据集 `license.txt`：CC-BY-SA-2.5；源文档图片的来源和修改见上游 sources index | 固定选择 10 种 document type，按 document group 切分；不提交图片 |
+| MIDV-Holo | 玻璃/覆膜反射、闪光灯、室内与户外光照下的文档四边形 | 数据集 `license.txt`：CC-BY-SA-2.5；上游请求衍生使用注明 Generated Photos face 来源 | 按 sample kind、lighting、device 和 ID/passport 受控抽取 clip；不提交图片 |
+| The Met Open Access | 合成 artwork 内容纹理 | 仅接受 API 返回 `isPublicDomain=true` 且有 primary image 的对象；对应 Open Access 图像按 CC0 使用 | 保存 object ID、对象页、原图 URL 与权利标记；不提交图片 |
+| COCO 2017 val | 合成场景背景池 | COCO 本身提供数据集条款；图片来自 Flickr，具体图片仍适用各自的 image-level license | 只下载官方 val2017，不下载 train2017；不提交图片 |
+| DIV2K | 已有合成内容/背景纹理池 | NTIRE/DIV2K 官方条款 | 复用现有 HR，本轮不重复下载、不提交图片 |
+
+准备入口为 `scripts/prepare_p2_geometry_data.py`。该脚本默认限制 P2 新增原始公开数据为
+14 GiB，合成生成器另有 6 GiB 上限，总预算约 20 GiB；同时保留至少 10 GiB 文件系统
+可用空间，并在 MIDV-Holo 受控子集抽取成功后删除 14 GB 原始 archive。训练清单仅记录
+数据根相对路径、来源与分组，不包含像素。
+
 ## 独立研究基准依赖
 
 ### DocAligner

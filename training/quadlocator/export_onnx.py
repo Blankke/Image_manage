@@ -26,6 +26,7 @@ OUTPUT_NAMES = [
     "content_mask_logits",
     "boundary_logits",
     "presence_logits",
+    "outer_presence_logits",
     "class_logits",
 ]
 
@@ -38,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     print("[####--------------------] 1/3 加载 checkpoint", file=sys.stderr)
     checkpoint = torch.load(args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False)
+    if checkpoint.get("format_version") != 2:
+        raise RuntimeError("只允许导出 format_version=2 的 7-output QuadLocator checkpoint")
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()

@@ -81,6 +81,7 @@ class ConfidencePolicy:
             reasons.append(RejectionReason.CORNER_UNCERTAIN)
         diagnostics = {
             "presence_confidence": float(prediction.presence_confidence),
+            "outer_presence_confidence": float(prediction.outer_presence_confidence),
             "class_confidence": float(prediction.class_confidence),
             "minimum_corner_confidence": corner_score,
             "boundary_support": float(boundary_score),

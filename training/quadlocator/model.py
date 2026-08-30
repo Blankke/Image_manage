@@ -69,7 +69,7 @@ class PredictionHead(nn.Sequential):
 
 
 class QuadLocatorS(nn.Module):
-    """输出 content/outer 四角热图、mask、boundary、presence 与类别。"""
+    """输出 content/outer 四角热图、mask、boundary、两类 presence 与类别。"""
 
     def __init__(self, width_multiplier: float = 1.0, class_count: int = 4) -> None:
         super().__init__()
@@ -108,7 +108,10 @@ class QuadLocatorS(nn.Module):
         self.content_mask_head = PredictionHead(fpn_channels, 1)
         self.boundary_head = PredictionHead(fpn_channels, 1)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
+        # ``presence_head`` 始终表示 content/target presence；outer 使用独立头，
+        # 避免无外框样本的随机 outer 热图被运行时误解为真实层级。
         self.presence_head = nn.Linear(channels[4], 1)
+        self.outer_presence_head = nn.Linear(channels[4], 1)
         self.class_head = nn.Linear(channels[4], class_count)
 
     def forward(self, image: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -137,6 +140,7 @@ class QuadLocatorS(nn.Module):
             "content_mask_logits": self.content_mask_head(pyramid2),
             "boundary_logits": self.boundary_head(pyramid2),
             "presence_logits": self.presence_head(pooled),
+            "outer_presence_logits": self.outer_presence_head(pooled),
             "class_logits": self.class_head(pooled),
         }
 
@@ -156,5 +160,6 @@ class QuadLocatorExportWrapper(nn.Module):
             output["content_mask_logits"],
             output["boundary_logits"],
             output["presence_logits"],
+            output["outer_presence_logits"],
             output["class_logits"],
         )

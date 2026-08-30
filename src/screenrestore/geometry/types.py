@@ -96,6 +96,7 @@ class QuadPrediction:
     outer_quad: np.ndarray | None = None
     corner_confidences: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     presence_confidence: float = 0.0
+    outer_presence_confidence: float = 0.0
     target_class: TargetClass = TargetClass.NONE
     class_confidence: float = 0.0
     layer_confidence: float = 1.0
@@ -118,6 +119,7 @@ class QuadPrediction:
         scalar_confidences = (
             *self.corner_confidences,
             self.presence_confidence,
+            self.outer_presence_confidence,
             self.class_confidence,
             self.layer_confidence,
         )
