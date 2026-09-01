@@ -28,6 +28,12 @@ class ValidationMetrics:
     boundary_true_positive: float = 0.0
     boundary_predicted: float = 0.0
     boundary_target: float = 0.0
+    boundary_positive_histogram: np.ndarray = field(
+        default_factory=lambda: np.zeros(101, dtype=np.int64)
+    )
+    boundary_negative_histogram: np.ndarray = field(
+        default_factory=lambda: np.zeros(101, dtype=np.int64)
+    )
     present_count: int = 0
     no_candidate_count: int = 0
     layer_ambiguous_count: int = 0
@@ -75,13 +81,29 @@ class ValidationMetrics:
         mask_target = targets["content_mask"] >= 0.5
         self.mask_intersection += float(torch.logical_and(mask_prediction, mask_target).sum())
         self.mask_union += float(torch.logical_or(mask_prediction, mask_target).sum())
-        boundary_prediction = torch.sigmoid(outputs["boundary_logits"]) >= 0.5
+        boundary_probability = torch.sigmoid(outputs["boundary_logits"])
+        boundary_prediction = boundary_probability >= 0.5
         boundary_target = targets["boundary"] >= 0.5
         self.boundary_true_positive += float(
             torch.logical_and(boundary_prediction, boundary_target).sum()
         )
         self.boundary_predicted += float(boundary_prediction.sum())
         self.boundary_target += float(boundary_target.sum())
+        probability_u8 = (
+            torch.clamp(torch.round(boundary_probability * 100.0), 0, 100)
+            .to(torch.int64)
+            .detach()
+            .cpu()
+            .numpy()
+            .reshape(-1)
+        )
+        target_flat = boundary_target.detach().cpu().numpy().reshape(-1)
+        self.boundary_positive_histogram += np.bincount(
+            probability_u8[target_flat], minlength=101
+        )
+        self.boundary_negative_histogram += np.bincount(
+            probability_u8[~target_flat], minlength=101
+        )
 
         for index in range(len(present)):
             self.outer_probabilities.append(float(outer_probability[index]))
@@ -147,6 +169,10 @@ class ValidationMetrics:
             if self.ambiguous_target_count
             else 1.0
         )
+        boundary_curve = _binary_curve_from_histograms(
+            self.boundary_positive_histogram,
+            self.boundary_negative_histogram,
+        )
         result: dict[str, object] = {
             "content_corner_nce_median": _percentile(self.content_nce, 50),
             "content_corner_nce_p95": _percentile(self.content_nce, 95, empty=1.0),
@@ -159,6 +185,10 @@ class ValidationMetrics:
             "boundary_f1": 2.0
             * self.boundary_true_positive
             / max(1.0, self.boundary_predicted + self.boundary_target),
+            "boundary_auprc": boundary_curve["auprc"],
+            "boundary_best_f1": boundary_curve["best_f1"],
+            "boundary_best_threshold": boundary_curve["best_threshold"],
+            "boundary_f1_at_0_5": boundary_curve["f1_at_0_5"],
             "outer_presence": outer,
             "outer_corner_nce_median": _percentile(self.outer_nce, 50),
             "outer_corner_nce_p95": _percentile(self.outer_nce, 95, empty=1.0),
@@ -186,6 +216,31 @@ class ValidationMetrics:
             + 0.10 * ambiguous_rejection_rate
         )
         return result
+
+
+def _binary_curve_from_histograms(
+    positive: np.ndarray,
+    negative: np.ndarray,
+) -> dict[str, float]:
+    """从 0.01 分箱统计生成可复现的 PR-AUC 与最佳 F1。"""
+
+    true_positive = np.cumsum(positive[::-1]).astype(np.float64)
+    false_positive = np.cumsum(negative[::-1]).astype(np.float64)
+    total_positive = max(1.0, float(positive.sum()))
+    recall = true_positive / total_positive
+    precision = true_positive / np.maximum(1.0, true_positive + false_positive)
+    f1 = 2.0 * precision * recall / np.maximum(1e-12, precision + recall)
+    best_index = int(np.argmax(f1))
+    thresholds = np.arange(100, -1, -1, dtype=np.float64) / 100.0
+    # recall 随阈值降低而递增，可直接梯形积分。
+    auprc = float(np.trapezoid(precision, recall))
+    threshold_05_index = int(np.argmin(np.abs(thresholds - 0.5)))
+    return {
+        "auprc": auprc,
+        "best_f1": float(f1[best_index]),
+        "best_threshold": float(thresholds[best_index]),
+        "f1_at_0_5": float(f1[threshold_05_index]),
+    }
 
 
 def _corner_nce(predicted: np.ndarray, target: np.ndarray) -> float:

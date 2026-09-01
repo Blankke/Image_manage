@@ -188,3 +188,14 @@ python scripts/audit_unlabeled_geometry.py \
 报告只含接受数、类别计数与拒绝原因，不含图像名称或像素。DIV2K wild 配对记录保存在
 `manifests/div2k.restoration.jsonl` 的 `wild_x4_images`；`full` 会把 x2 和 wild-x4 分别训练为
 独立的保守超分模型，禁止混成同一个数据源或权重。
+
+## P3 高置信几何与 faithful restoration
+
+P3 使用 `scripts/train_p3.sh` 作为唯一分阶段入口。B0 固定为 P2 Stage B epoch 12，B1/B3 是
+短 warm-start 消融，B2/B4 只做评估与校准代码闭环，B5 是唯一 FULL geometry。恢复顺序为最多
+一个强专项 → FidelityNet-v2 → 参数化 PhotometricNet → 可选保守 SR；在线退化不会写 augmentation
+cache。
+
+可直接执行的完整阶段命令、真实清单路径、外部数据 BLOCKED 状态与条件 B6/SR 门见
+[`P3_TRAINING_COMMANDS.md`](P3_TRAINING_COMMANDS.md)。正式训练要求 `P3_DEVICE=mps`，MPS 不可用时
+硬失败；输出阶段目录已存在时拒绝覆盖。

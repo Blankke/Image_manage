@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ import numpy as np
 
 from screenrestore.geometry import (
     AutomaticGeometryService,
+    ConfidencePolicy,
+    CorrectnessCalibrator,
     LocalizationDecision,
     OnnxQuadDetector,
     TargetClass,
@@ -33,6 +36,8 @@ from screenrestore.validation import (
     GeometryGroundTruth,
     aggregate_geometry_results,
     evaluate_geometry_decision,
+    risk_coverage_report,
+    slice_report,
 )
 
 
@@ -67,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--quad-model", type=Path)
     parser.add_argument(
+        "--correctness-calibrator",
+        type=Path,
+        help="只读 JSON logistic 校准器；其阈值必须事先由 validation/calibration 冻结预测确定",
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
         help=(
@@ -92,7 +102,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     data_directory = args.data_directory.expanduser().resolve()
     detector = OnnxQuadDetector(args.quad_model) if args.quad_model is not None else None
-    service = AutomaticGeometryService(detector)
+    calibrator = (
+        CorrectnessCalibrator.load(args.correctness_calibrator)
+        if args.correctness_calibrator is not None
+        else None
+    )
+    service = AutomaticGeometryService(detector, policy=ConfidencePolicy(calibrator=calibrator))
     if args.manifest is None:
         case_reports, group_ids = _run_legacy_cases(service, data_directory, args.ground_truth)
     else:
@@ -106,26 +121,62 @@ def main(argv: list[str] | None = None) -> int:
             args.split,
         )
     _progress(len(case_reports), len(case_reports), "汇总 gate")
-    gate = GeometryGate(minimum_samples=1 if args.smoke else 100)
+    release_gate = GeometryGate(minimum_samples=1 if args.smoke else 100)
     summary = aggregate_geometry_results(
         [report["metrics"] for report in case_reports],  # type: ignore[list-item]
-        gate,
+        release_gate,
+        group_ids,
+    )
+    development_summary = aggregate_geometry_results(
+        [report["metrics"] for report in case_reports],  # type: ignore[list-item]
+        GeometryGate(
+            accepted_precision_min=0.95,
+            in_scope_coverage_min=0.50,
+            wrong_layer_rate_max=0.02,
+            nce_p95_max=0.03,
+            iou_median_min=0.90,
+            iou_p05_min=0.85,
+            minimum_samples=1 if args.smoke else 30,
+        ),
         group_ids,
     )
     report = {
         "protocol": "e2e_auto",
-        "protocol_version": 1,
+        "protocol_version": 2,
         "run_kind": "smoke" if args.smoke else "release_gate",
         "inference_inputs": ["photo_rgb"],
         "forbidden_inference_inputs": ["clean_reference", "oracle_corners"],
         "oracle_loaded_after_all_predictions": True,
         "backend": "quadlocator_onnx" if args.quad_model is not None else "classic_fallback",
+        "correctness_calibrator": (
+            str(args.correctness_calibrator.expanduser().resolve())
+            if args.correctness_calibrator is not None
+            else None
+        ),
         "summary": summary,
         "cases": case_reports,
     }
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    metrics = [report["metrics"] for report in case_reports]  # type: ignore[list-item]
+    (output.parent / "slices.json").write_text(
+        json.dumps(slice_report(case_reports), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (output.parent / "release-gate.json").write_text(
+        json.dumps(
+            {"development": development_summary, "release": summary},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (output.parent / "risk-coverage.json").write_text(
+        json.dumps(risk_coverage_report(metrics), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(output)
     return 0 if summary["status"] == "PASS" else 1
 
@@ -164,6 +215,14 @@ def _run_legacy_cases(
                 "photo": case.photo,
                 "decision": decision.to_dict(photo_shape),
                 "metrics": evaluate_geometry_decision(decision, truth),
+                "slice_metadata": {
+                    "target_class": case.target_class.value,
+                    "source": "legacy-smoke",
+                    "device": "unknown",
+                    "hard_taxonomy": "unknown",
+                    "difficulty": "unknown",
+                    "in_scope": bool(truth.in_scope),
+                },
             }
         )
     return case_reports, [case.name for case, _shape, _decision in predictions]
@@ -178,11 +237,11 @@ def _run_manifest_cases(
 ) -> tuple[list[dict[str, object]], list[str]]:
     """以通用 geometry 清单评测真实数据，且预测阶段不读取任何人工标签。
 
-    ``data_directory`` 只用于扫描用户已明确指定的数据集照片。清单在所有照片预测完成后
-    才读取，从而避免 ``content_quad``、类别或可见性标注进入自动定位路径。
+    预测前只从清单文本投影 ``image``/``split`` 两个调度字段，不解析 JSON 记录，因此
+    ``content_quad``、类别、可见性等 GT 不会被物化。完整清单仍在全部预测冻结后才读取。
     """
 
-    photos = _find_photos(data_directory)
+    photos = _inference_photo_paths(manifest_path, dataset_root, data_directory, split)
     if not photos:
         raise ValueError(f"数据目录中没有可评测图片：{data_directory}")
     predictions: dict[Path, tuple[tuple[int, ...], LocalizationDecision]] = {}
@@ -211,12 +270,66 @@ def _run_manifest_cases(
                 "photo": str(record["image"]),
                 "decision": decision.to_dict(photo_shape),
                 "metrics": evaluate_geometry_decision(decision, truth),
+                "slice_metadata": {
+                    "target_class": str(record["target_class"]),
+                    "source": str(record.get("source", "unknown")),
+                    "device": str(record.get("device", "unknown")),
+                    "hard_taxonomy": str(
+                        record.get("hard_taxonomy", record.get("scene_type", "unknown"))
+                    ),
+                    "difficulty": str(record.get("difficulty", "unknown")),
+                    "in_scope": bool(truth.in_scope),
+                },
             }
         )
         group_ids.append(str(record["group_id"]))
     if not case_reports:
         raise ValueError("没有找到同时位于 data-directory 与指定 manifest split 的图片")
     return case_reports, group_ids
+
+
+def _inference_photo_paths(
+    manifest_path: Path,
+    dataset_root: Path,
+    data_directory: Path,
+    split: str,
+) -> list[Path]:
+    """只解析调度字段，避免对同一数据集其它 split 做无意义推理。"""
+
+    root = data_directory.expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"数据目录不存在：{root}")
+    output: list[Path] = []
+    for line_number, line in enumerate(
+        manifest_path.expanduser().resolve().read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        if not line.strip():
+            continue
+        image = _project_json_string(line, "image")
+        record_split = _project_json_string(line, "split")
+        if image is None or record_split is None:
+            raise ValueError(f"manifest 第 {line_number} 行缺少 image/split 调度字段")
+        if record_split != split:
+            continue
+        path = _resolve_manifest_image(dataset_root, image)
+        if not path.is_relative_to(root) or not path.is_file():
+            continue
+        output.append(path)
+    return sorted(set(output))
+
+
+def _project_json_string(line: str, field: str) -> str | None:
+    """从 JSONL 文本只解码一个字符串字段，不解析该行其余 GT。"""
+
+    match = re.search(rf'"{re.escape(field)}"\s*:\s*', line)
+    if match is None:
+        return None
+    try:
+        value, _end = json.JSONDecoder().raw_decode(line[match.end() :])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"manifest {field} 字段不是合法 JSON 字符串") from exc
+    return value if isinstance(value, str) else None
 
 
 def _resolve_manifest_image(dataset_root: Path, image: str) -> Path:

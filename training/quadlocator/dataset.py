@@ -27,6 +27,7 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         split: str,
         image_size: int = 640,
         heatmap_sigma: float = 2.5,
+        boundary_sigma: float = 1.5,
         dataset_root: str | Path | None = None,
         max_samples: int = 0,
         augment: bool | None = None,
@@ -43,6 +44,9 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         self.image_size = image_size
         self.output_size = image_size // 4
         self.heatmap_sigma = heatmap_sigma
+        if not 1.0 <= boundary_sigma <= 3.0:
+            raise ValueError("boundary_sigma 必须位于 head 分辨率的 1..3 像素")
+        self.boundary_sigma = float(boundary_sigma)
         self.split = split
         self.augment = split == "train" if augment is None else augment
         if split != "train" and self.augment:
@@ -100,7 +104,7 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         content_heatmaps = _corner_heatmaps(content_quad, self.output_size, self.heatmap_sigma)
         outer_heatmaps = _corner_heatmaps(outer_quad, self.output_size, self.heatmap_sigma)
         content_mask = _polygon_mask(content_quad, self.output_size, filled=True)
-        boundary = _polygon_mask(content_quad, self.output_size, filled=False)
+        boundary = _boundary_target(content_quad, self.output_size, self.boundary_sigma)
         target_corners = (
             content_quad.astype(np.float32)
             if content_quad is not None
@@ -159,9 +163,16 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
 
 
 class SourceGroupBalancedSampler(Sampler[int]):
-    """先均匀选择 source，再均匀选择 group，最后选择该 group 的一帧。"""
+    """先均匀选择 source/group，再按 difficulty 与 taxonomy 加权选择困难帧。"""
 
-    def __init__(self, dataset: QuadDataset, *, seed: int, samples_per_epoch: int = 0) -> None:
+    def __init__(
+        self,
+        dataset: QuadDataset,
+        *,
+        seed: int,
+        samples_per_epoch: int = 0,
+        difficulty_weighting: bool = False,
+    ) -> None:
         if samples_per_epoch < 0:
             raise ValueError("samples_per_epoch 不能为负数")
         self.dataset = dataset
@@ -175,6 +186,12 @@ class SourceGroupBalancedSampler(Sampler[int]):
             grouped.setdefault(source, {}).setdefault(group, []).append(index)
         self._grouped = grouped
         self._sources = sorted(grouped)
+        self._weights = np.asarray(
+            [
+                _difficulty_weight(record) if difficulty_weighting else 1.0
+                for record in dataset.records
+            ]
+        )
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -189,7 +206,26 @@ class SourceGroupBalancedSampler(Sampler[int]):
             groups = sorted(self._grouped[source])
             group = groups[int(rng.integers(0, len(groups)))]
             indices = self._grouped[source][group]
-            yield indices[int(rng.integers(0, len(indices)))]
+            weights = self._weights[indices]
+            probabilities = weights / max(float(weights.sum()), 1e-8)
+            yield int(rng.choice(indices, p=probabilities))
+
+
+def _difficulty_weight(record: dict[str, Any]) -> float:
+    """清单可用数值或 easy/medium/hard/critical 声明采样难度。"""
+
+    raw = record.get("sampler_weight", record.get("difficulty", 1.0))
+    if isinstance(raw, str):
+        weight = {"easy": 0.7, "medium": 1.0, "hard": 1.8, "critical": 2.5}.get(raw, 1.0)
+    else:
+        try:
+            weight = float(raw)
+        except (TypeError, ValueError):
+            weight = 1.0
+    taxonomy = str(record.get("hard_taxonomy", record.get("scene_type", "")))
+    if taxonomy and taxonomy not in {"unknown", "standard", "none"}:
+        weight *= 1.35
+    return float(np.clip(weight, 0.1, 5.0))
 
 
 def _record_source(record: dict[str, Any]) -> str:
@@ -325,6 +361,26 @@ def _polygon_mask(quad: np.ndarray | None, output_size: int, *, filled: bool) ->
     else:
         cv2.polylines(mask, [points], True, 1.0, thickness=max(1, output_size // 160))
     return mask
+
+
+def _boundary_target(
+    quad: np.ndarray | None,
+    output_size: int,
+    sigma: float = 1.5,
+) -> np.ndarray:
+    """在 head 分辨率生成围绕 content 边界的距离感知高斯窄带。"""
+
+    if quad is None:
+        return np.zeros((output_size, output_size), dtype=np.float32)
+    inside = _polygon_mask(quad, output_size, filled=True).astype(np.uint8)
+    outside = 1 - inside
+    distance_inside = cv2.distanceTransform(inside, cv2.DIST_L2, 5)
+    distance_outside = cv2.distanceTransform(outside, cv2.DIST_L2, 5)
+    # 两侧到分界线的近似距离。减去半个像素使离散边界中心保持接近 1。
+    distance = np.maximum(distance_inside + distance_outside - 1.0, 0.0)
+    target = np.exp(-0.5 * np.square(distance / sigma))
+    target[distance > sigma * 4.0] = 0.0
+    return target.astype(np.float32)
 
 
 def _augment_sample(

@@ -9,9 +9,14 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from .degradation import CameraDegradationConfig, degrade_camera_image
+from .degradation import (
+    CameraDegradationConfig,
+    degrade_camera_image,
+    factorized_degradation_graph,
+)
 
 _IMAGE_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+FIDELITY_ARTIFACTS = ("resize", "noise", "defocus", "motion", "jpeg", "ringing")
 
 
 class Div2kHrDataset(Dataset[dict[str, torch.Tensor]]):
@@ -25,6 +30,7 @@ class Div2kHrDataset(Dataset[dict[str, torch.Tensor]]):
         degradation: CameraDegradationConfig | None = None,
         seed: int = 20260827,
         max_samples: int = 0,
+        preserve_photometric_nuisance: bool = False,
     ) -> None:
         self.hr_directory = Path(hr_directory).expanduser().resolve()
         if not self.hr_directory.is_dir():
@@ -33,6 +39,7 @@ class Div2kHrDataset(Dataset[dict[str, torch.Tensor]]):
             raise ValueError("patch_size 必须不小于 64 且为 8 的倍数")
         self.patch_size = patch_size
         self.degradation = degradation or CameraDegradationConfig()
+        self.preserve_photometric_nuisance = preserve_photometric_nuisance
         self.seed = seed
         self.epoch = 0
         paths = tuple(
@@ -61,12 +68,35 @@ class Div2kHrDataset(Dataset[dict[str, torch.Tensor]]):
         path = self.paths[index]
         with Image.open(path) as opened:
             source_rgb = np.asarray(opened.convert("RGB"), dtype=np.uint8).copy()
-        rng = np.random.default_rng(np.random.SeedSequence((self.seed, self.epoch, index)))
+        seed_sequence = np.random.SeedSequence((self.seed, self.epoch, index))
+        rng = np.random.default_rng(seed_sequence)
         clean_crop = _random_crop(source_rgb, self.patch_size, rng)
-        sample = degrade_camera_image(clean_crop, rng, self.degradation)
+        if self.preserve_photometric_nuisance:
+            graph_seed = int(seed_sequence.generate_state(1, dtype=np.uint32)[0])
+            graph = factorized_degradation_graph(
+                clean_crop,
+                task="fidelity",
+                seed=graph_seed,
+                config=self.degradation,
+            )
+            degraded, target = graph.input_rgb, graph.target_rgb
+            trace = graph.trace.to_dict()
+            active = trace["artifacts"]
+            severity = trace["severity"]
+            assert isinstance(active, dict) and isinstance(severity, dict)
+            artifact_labels = [float(bool(active.get(name, False))) for name in FIDELITY_ARTIFACTS]
+            artifact_severity = [float(severity.get(name, 0.0)) for name in FIDELITY_ARTIFACTS]
+        else:
+            sample = degrade_camera_image(clean_crop, rng, self.degradation)
+            degraded = sample.degraded_rgb
+            target = clean_crop.astype(np.float32) / 255.0
+            artifact_labels = [0.0] * len(FIDELITY_ARTIFACTS)
+            artifact_severity = [0.0] * len(FIDELITY_ARTIFACTS)
         return {
-            "input": torch.from_numpy(sample.degraded_rgb.copy()).permute(2, 0, 1),
-            "target": torch.from_numpy(clean_crop.copy()).permute(2, 0, 1).float() / 255.0,
+            "input": torch.from_numpy(degraded.copy()).permute(2, 0, 1),
+            "target": torch.from_numpy(target.copy()).permute(2, 0, 1),
+            "artifact_labels": torch.tensor(artifact_labels, dtype=torch.float32),
+            "artifact_severity": torch.tensor(artifact_severity, dtype=torch.float32),
         }
 
 

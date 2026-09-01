@@ -10,6 +10,7 @@ def test_evaluation_slices_include_identity_and_major_camera_degradations() -> N
 
     assert set(slices) == {
         "clean_identity",
+        "resize",
         "noise_light",
         "noise_heavy",
         "defocus",

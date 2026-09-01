@@ -23,6 +23,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from screenrestore.geometry.decoder import CornerDecoderSpec
 from training.quadlocator.dataset import QuadDataset, SourceGroupBalancedSampler
 from training.quadlocator.losses import quadlocator_loss
 from training.quadlocator.metrics import ValidationMetrics
@@ -43,6 +44,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--width-multiplier", type=float, default=1.0)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
+    parser.add_argument(
+        "--loss-profile",
+        choices=("p2", "boundary", "tail", "full"),
+        default="p2",
+        help="P3 消融：B1=boundary，B3=tail，B5=full",
+    )
+    parser.add_argument(
+        "--hard-sampling",
+        action="store_true",
+        help="按 difficulty/hard_taxonomy 加权；仅 B3/B5 启用",
+    )
     parser.add_argument(
         "--init-checkpoint",
         type=Path,
@@ -86,7 +98,11 @@ def main(argv: list[str] | None = None) -> int:
         augment=False,
         seed=args.seed,
     )
-    sampler = SourceGroupBalancedSampler(train_data, seed=args.seed)
+    sampler = SourceGroupBalancedSampler(
+        train_data,
+        seed=args.seed,
+        difficulty_weighting=args.hard_sampling,
+    )
     train_loader = DataLoader(
         train_data,
         batch_size=args.batch_size,
@@ -110,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     started_at = time.monotonic()
     # 每次训练将可比较的实验元数据独立落盘；不记录图片内容，也不把运行产物放入仓库。
     run_metadata = {
+        "format_version": 3,
         "dataset_manifest": str(args.manifest.expanduser().resolve()),
         "dataset_root": str(train_data.root),
         "train_samples": len(train_data),
@@ -128,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
         else None,
         "warm_start": warm_start,
         "early_stopping_patience": args.early_stopping_patience,
+        "decoder": CornerDecoderSpec().to_dict(),
+        "seed": args.seed,
+        "loss_profile": args.loss_profile,
+        "hard_sampling": args.hard_sampling,
     }
     _warn_missing_training_domains(run_metadata["train_distribution"])
     (output_directory / "run.json").write_text(
@@ -141,7 +162,15 @@ def main(argv: list[str] | None = None) -> int:
     for epoch in range(1, args.epochs + 1):
         train_data.set_epoch(epoch)
         sampler.set_epoch(epoch)
-        train_loss, _ = _run_epoch(model, train_loader, device, optimizer, epoch, args.epochs)
+        train_loss, _ = _run_epoch(
+            model,
+            train_loader,
+            device,
+            optimizer,
+            epoch,
+            args.epochs,
+            loss_profile=args.loss_profile,
+        )
         validation_loss, validation_metrics = _run_epoch(
             model,
             validation_loader,
@@ -149,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             None,
             epoch,
             args.epochs,
+            loss_profile=args.loss_profile,
             collect_validation_metrics=True,
         )
         scheduler.step()
@@ -163,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         history.append(record)
         print(json.dumps(record, ensure_ascii=False), file=sys.stderr)
         checkpoint = {
-            "format_version": 2,
+            "format_version": 3,
             "model": "QuadLocatorS",
             "width_multiplier": args.width_multiplier,
             "image_size": args.image_size,
@@ -173,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
             "epoch": epoch,
             "validation_loss": validation_loss,
             "validation_metrics": validation_metrics,
+            "decoder": CornerDecoderSpec().to_dict(),
+            "seed": args.seed,
+            "loss_profile": args.loss_profile,
+            "hard_sampling": args.hard_sampling,
         }
         torch.save(checkpoint, output_directory / "last.pt")
         selection_score = float(validation_metrics["selection_score"])
@@ -215,6 +249,7 @@ def _run_epoch(
     epoch: int,
     epochs: int,
     *,
+    loss_profile: str = "full",
     collect_validation_metrics: bool = False,
 ) -> tuple[float, dict[str, object]]:
     training = optimizer is not None
@@ -226,7 +261,7 @@ def _run_epoch(
         values = {key: tensor.to(device) for key, tensor in batch.items()}
         with torch.set_grad_enabled(training):
             outputs = model(values["image"])
-            loss, _metrics = quadlocator_loss(outputs, values)
+            loss, _metrics = quadlocator_loss(outputs, values, profile=loss_profile)
             if validation_metrics is not None:
                 validation_metrics.update(outputs, values)
             if training:

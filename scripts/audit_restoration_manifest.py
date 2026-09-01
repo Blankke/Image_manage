@@ -23,26 +23,52 @@ from typing import Any
 import cv2
 
 _TASKS = {
-    "denoise",
-    "deblur",
+    "fidelity",
     "photometric",
     "reflection_single",
     "reflection_multiframe",
     "demoire",
+    "dewarp",
     "super_resolution",
+    "router",
 }
 _SPLITS = {"train", "validation", "test"}
-_PATH_FIELDS = ("input_image", "target_image", "reflection_mask", "validity_mask")
+_PATH_FIELDS = (
+    "input_image",
+    "target_image",
+    "reflection_mask",
+    "unresolved_mask",
+    "validity_mask",
+)
 _REQUIRED = {
     "sample_id",
     "task",
     "split",
+    "subject_id",
     "group_id",
     "capture_session",
+    "reference_type",
+    "alignment",
+    "artifact_labels",
+    "artifact_severity",
+    "degradation_trace",
     "input_image",
     "target_image",
+    "device",
     "source",
     "license",
+    "license_restriction",
+}
+_OPTIONAL = {
+    "observed_frames",
+    "target_metadata",
+    "degradation_parameters",
+    "artifact_masks",
+    "moire_metadata",
+    "photometric_parameters",
+    "lens_parameters",
+    "dense_backward_grid",
+    "camera_metadata",
 }
 
 
@@ -92,6 +118,7 @@ def audit_manifest(
     splits: Counter[str] = Counter()
     group_splits: dict[str, set[str]] = defaultdict(set)
     session_splits: dict[str, set[str]] = defaultdict(set)
+    subject_splits: dict[str, set[str]] = defaultdict(set)
     dimensions: Counter[str] = Counter()
     record_count = 0
     for line_number, raw_line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -105,6 +132,7 @@ def audit_manifest(
         splits[split] += 1
         group_splits[str(record["group_id"])].add(split)
         session_splits[str(record["capture_session"])].add(split)
+        subject_splits[str(record["subject_id"])].add(split)
         if check_images:
             input_shape = _image_shape(root, record["input_image"], line_number, allow_private)
             target_shape = _image_shape(root, record["target_image"], line_number, allow_private)
@@ -124,18 +152,22 @@ def audit_manifest(
         raise ValueError("manifest 没有有效记录")
     leaked_groups = sum(len(values) > 1 for values in group_splits.values())
     leaked_sessions = sum(len(values) > 1 for values in session_splits.values())
-    if leaked_groups or leaked_sessions:
+    leaked_subjects = sum(len(values) > 1 for values in subject_splits.values())
+    if leaked_groups or leaked_sessions or leaked_subjects:
         raise ValueError(
-            f"检测到数据泄漏：group_id={leaked_groups}，capture_session={leaked_sessions} 跨 split"
+            "检测到数据泄漏："
+            f"subject_id={leaked_subjects}，group_id={leaked_groups}，"
+            f"capture_session={leaked_sessions} 跨 split"
         )
     return {
-        "format_version": 1,
+        "format_version": 2,
         "kind": "restoration_manifest_audit",
         "status": "ok",
         "records": record_count,
         "task_counts": dict(sorted(tasks.items())),
         "split_counts": dict(sorted(splits.items())),
         "group_count": len(group_splits),
+        "subject_count": len(subject_splits),
         "capture_session_count": len(session_splits),
         "image_checked": check_images,
         "input_size_counts": dict(sorted(dimensions.items())) if check_images else {},
@@ -155,14 +187,37 @@ def _record(raw_line: str, line_number: int) -> dict[str, Any]:
 
 def _validate_record(record: dict[str, Any], line_number: int) -> None:
     missing = sorted(_REQUIRED - record.keys())
-    unknown = sorted(set(record) - (_REQUIRED | set(_PATH_FIELDS) | {"observed_frames", "target_metadata"}))
+    unknown = sorted(set(record) - (_REQUIRED | set(_PATH_FIELDS) | _OPTIONAL))
     if missing or unknown:
         raise ValueError(f"第 {line_number} 行契约不匹配：缺少={missing}，未知字段={unknown}")
     if record["task"] not in _TASKS or record["split"] not in _SPLITS:
         raise ValueError(f"第 {line_number} 行 task 或 split 不合法")
-    for field in _REQUIRED - {"task", "split"}:
+    scalar_fields = _REQUIRED - {
+        "task",
+        "split",
+        "alignment",
+        "artifact_labels",
+        "artifact_severity",
+        "degradation_trace",
+    }
+    for field in scalar_fields:
         if not isinstance(record[field], str) or not record[field].strip():
             raise ValueError(f"第 {line_number} 行 {field} 必须是非空字符串")
+    if not isinstance(record["alignment"], dict) or not {
+        "method",
+        "coordinate_space",
+    }.issubset(record["alignment"]):
+        raise ValueError(f"第 {line_number} 行 alignment 缺少 method/coordinate_space")
+    if not isinstance(record["artifact_labels"], list):
+        raise ValueError(f"第 {line_number} 行 artifact_labels 必须是列表")
+    if not isinstance(record["artifact_severity"], dict):
+        raise ValueError(f"第 {line_number} 行 artifact_severity 必须是对象")
+    trace = record["degradation_trace"]
+    trace_required = {"version", "seed", "target_stage", "identity", "artifacts", "steps"}
+    if not isinstance(trace, dict) or not trace_required.issubset(trace):
+        raise ValueError(f"第 {line_number} 行 degradation_trace 契约不完整")
+    if not isinstance(trace["steps"], list):
+        raise ValueError(f"第 {line_number} 行 degradation_trace.steps 必须是列表")
     if record["task"] == "reflection_multiframe":
         frames = record.get("observed_frames")
         if not isinstance(frames, list) or not frames:

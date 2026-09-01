@@ -28,7 +28,7 @@ def test_audit_accepts_supervised_pairs_without_group_leakage(tmp_path: Path) ->
     report = audit_manifest(data_root, manifest)
 
     assert report["records"] == 1
-    assert report["task_counts"] == {"denoise": 1}
+    assert report["task_counts"] == {"fidelity": 1}
     assert report["split_counts"] == {"train": 1}
 
 
@@ -42,6 +42,24 @@ def test_audit_rejects_group_split_leakage(tmp_path: Path) -> None:
     manifest.write_text("\n".join(json.dumps(item) for item in (first, second)) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="数据泄漏"):
+        audit_manifest(data_root, manifest)
+
+
+def test_audit_rejects_subject_split_leakage(tmp_path: Path) -> None:
+    data_root = tmp_path / "data"
+    _write_image(data_root / "noise" / "input.png", 16, 12)
+    _write_image(data_root / "noise" / "target.png", 16, 12)
+    first = _record(sample_id="a", split="train", group_id="group:a", capture_session="a")
+    second = _record(
+        sample_id="b", split="test", group_id="group:b", capture_session="b"
+    )
+    manifest = tmp_path / "pairs.jsonl"
+    manifest.write_text(
+        "\n".join(json.dumps(item) for item in (first, second)) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="subject_id=1"):
         audit_manifest(data_root, manifest)
 
 
@@ -60,15 +78,31 @@ def test_audit_requires_explicit_private_access(tmp_path: Path) -> None:
 
 def _record(**updates: object) -> dict[str, object]:
     record: dict[str, object] = {
-        "sample_id": "denoise:001",
-        "task": "denoise",
+        "sample_id": "fidelity:001",
+        "task": "fidelity",
         "split": "train",
+        "subject_id": "subject:001",
         "group_id": "scene:001",
         "capture_session": "session:001",
+        "reference_type": "exact_pair",
+        "alignment": {"method": "identity", "coordinate_space": "target", "quality": 1.0},
+        "artifact_labels": ["noise"],
+        "artifact_severity": {"noise": 0.2},
+        "degradation_trace": {
+            "version": "factorized-v1",
+            "seed": 1,
+            "target_stage": "artifact",
+            "identity": False,
+            "artifacts": {"noise": True},
+            "severity": {"noise": 0.2},
+            "steps": [],
+        },
         "input_image": "noise/input.png",
         "target_image": "noise/target.png",
+        "device": "synthetic",
         "source": "test",
         "license": "test",
+        "license_restriction": "private_local_only",
     }
     record.update(updates)
     return record

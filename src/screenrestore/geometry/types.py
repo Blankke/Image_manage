@@ -102,6 +102,7 @@ class QuadPrediction:
     layer_confidence: float = 1.0
     content_mask: np.ndarray | None = None
     boundary_map: np.ndarray | None = None
+    decoder_diagnostics: dict[str, Any] = field(default_factory=dict)
     candidates: tuple[QuadrilateralCandidate, ...] = ()
     backend: str = "unknown"
 
@@ -151,12 +152,22 @@ class EdgeRefinement:
     edge_support: tuple[float, float, float, float]
     corner_shifts: tuple[float, float, float, float]
     reason: str = ""
+    residual_median: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    residual_p95: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    continuous_coverage: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    gradient_normal_alignment: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    boundary_consistency: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    area_drift: float = 0.0
+    aspect_drift: float = 0.0
+    outcome: str = "neutral"
 
     def __post_init__(self) -> None:
         corners = np.asarray(self.corners, dtype=np.float32)
         if corners.shape != (4, 2) or not np.all(np.isfinite(corners)):
             raise ValueError("精修四边形必须是有限的 4×2 数组")
         object.__setattr__(self, "corners", corners.copy())
+        if self.outcome not in {"improved", "neutral", "worsened", "rolled_back"}:
+            raise ValueError("精修 outcome 必须为 improved/neutral/worsened/rolled_back")
 
     @property
     def mean_support(self) -> float:

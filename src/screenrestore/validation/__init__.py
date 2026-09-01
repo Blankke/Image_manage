@@ -4,10 +4,12 @@ from .geometry_benchmark import (
     GeometryGate,
     GeometryGroundTruth,
     aggregate_geometry_results,
+    binomial_interval,
     corner_metrics,
     evaluate_geometry_decision,
     polygon_iou,
 )
+from .geometry_risk import risk_coverage_report, slice_report
 from .reference_comparison import (
     ReferenceRegistration,
     align_for_comparison,
@@ -23,6 +25,7 @@ __all__ = [
     "ReferenceRegistration",
     "align_for_comparison",
     "aggregate_geometry_results",
+    "binomial_interval",
     "compare_images",
     "corner_metrics",
     "difference_heatmap",
@@ -30,4 +33,6 @@ __all__ = [
     "evaluate_geometry_decision",
     "polygon_iou",
     "register_reference",
+    "risk_coverage_report",
+    "slice_report",
 ]

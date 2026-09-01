@@ -15,9 +15,66 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import cv2
 import numpy as np
+
+DEGRADATION_GRAPH_VERSION = "factorized-c-p-a-o-i-v1"
+TargetStage = Literal["canonical", "photometric", "artifact", "optical", "observation"]
+
+
+@dataclass(frozen=True, slots=True)
+class DegradationStep:
+    """一项可审计退化；参数中不得包含像素或文件路径。"""
+
+    name: str
+    stage: Literal["photometric", "artifact", "optical", "sensor"]
+    active: bool
+    severity: float
+    parameters: dict[str, float | int | bool | str | list[float]]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DegradationTrace:
+    """C/P/A/O/I 图的逻辑追踪，不保存 augmentation 图片。"""
+
+    seed: int
+    target_stage: TargetStage
+    identity: bool
+    steps: tuple[DegradationStep, ...]
+    version: str = DEGRADATION_GRAPH_VERSION
+
+    def to_dict(self) -> dict[str, object]:
+        artifacts = {step.name: step.active for step in self.steps}
+        severity = {step.name: step.severity for step in self.steps}
+        return {
+            "version": self.version,
+            "seed": self.seed,
+            "target_stage": self.target_stage,
+            "identity": self.identity,
+            "artifacts": artifacts,
+            "severity": severity,
+            "steps": [step.to_dict() for step in self.steps],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FactorizedDegradationSample:
+    """逻辑中间状态只存在于当前样本内存，供不同 task 选择监督 target。"""
+
+    canonical_rgb: np.ndarray
+    photometric_rgb: np.ndarray
+    artifact_rgb: np.ndarray
+    optical_rgb: np.ndarray
+    observation_rgb: np.ndarray
+    input_rgb: np.ndarray
+    target_rgb: np.ndarray
+    trace: DegradationTrace
+    artifact_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +94,13 @@ class CameraDegradationConfig:
     max_exposure_stops: float = 0.45
     max_white_balance_shift: float = 0.18
     max_illumination_gradient: float = 0.22
+    max_ccm_residual: float = 0.06
+    max_tone_gamma_delta: float = 0.18
+    max_vignette_strength: float = 0.22
     min_jpeg_quality: int = 52
     max_jpeg_quality: int = 94
     clean_probability: float = 0.04
+    apply_photometric: bool = True
 
     def __post_init__(self) -> None:
         if not 0.25 <= self.min_resize_scale <= self.max_resize_scale <= 1.0:
@@ -65,6 +126,12 @@ class CameraDegradationConfig:
             raise ValueError("max_white_balance_shift 必须位于 0..0.45")
         if not 0.0 <= self.max_illumination_gradient <= 0.5:
             raise ValueError("max_illumination_gradient 必须位于 0..0.5")
+        if not 0.0 <= self.max_ccm_residual <= 0.15:
+            raise ValueError("max_ccm_residual 必须位于 0..0.15")
+        if not 0.0 <= self.max_tone_gamma_delta <= 0.35:
+            raise ValueError("max_tone_gamma_delta 必须位于 0..0.35")
+        if not 0.0 <= self.max_vignette_strength <= 0.45:
+            raise ValueError("max_vignette_strength 必须位于 0..0.45")
         if not 15 <= self.min_jpeg_quality <= self.max_jpeg_quality <= 100:
             raise ValueError("JPEG quality 必须位于 15..100")
 
@@ -124,15 +191,24 @@ def degrade_camera_image(
         )
     parameters["motion_length"] = motion_length
 
-    exposure_stops = float(rng.uniform(settings.min_exposure_stops, settings.max_exposure_stops))
-    wb_delta = rng.uniform(
-        -settings.max_white_balance_shift,
-        settings.max_white_balance_shift,
-        size=3,
-    ).astype(np.float32)
+    exposure_stops = (
+        float(rng.uniform(settings.min_exposure_stops, settings.max_exposure_stops))
+        if settings.apply_photometric
+        else 0.0
+    )
+    wb_delta = (
+        rng.uniform(-settings.max_white_balance_shift, settings.max_white_balance_shift, size=3)
+        .astype(np.float32)
+        if settings.apply_photometric
+        else np.zeros(3, np.float32)
+    )
     white_balance = np.clip(1.0 + wb_delta - wb_delta.mean(), 0.65, 1.45)
+    illumination = (
+        _illumination_field(height, width, rng, settings.max_illumination_gradient)
+        if settings.apply_photometric
+        else np.ones((height, width), np.float32)
+    )
     linear *= white_balance.reshape(1, 1, 3) * float(2.0**exposure_stops)
-    illumination = _illumination_field(height, width, rng, settings.max_illumination_gradient)
     linear *= illumination[..., None]
     parameters.update(
         {
@@ -169,6 +245,273 @@ def degrade_camera_image(
         degraded_rgb=np.ascontiguousarray(degraded.astype(np.float32)),
         parameters=parameters,
     )
+
+
+def factorized_degradation_graph(
+    clean_rgb: np.ndarray,
+    *,
+    task: Literal["fidelity", "photometric", "demoire", "reflection", "identity"],
+    seed: int,
+    config: CameraDegradationConfig | None = None,
+) -> FactorizedDegradationSample:
+    """按 C→P→A→O→I 生成在线监督对，并记录完整参数追踪。
+
+    Fidelity 的 target 为 A（没有专项 artifact 时 A=P），因此曝光、WB 与 illumination
+    会同时保留在输入和 target；Photometric、Demoire、Reflection 分别使用 C、P、P。
+    """
+
+    if seed < 0:
+        raise ValueError("退化 seed 不能为负数")
+    settings = config or CameraDegradationConfig()
+    rng = np.random.default_rng(seed)
+    canonical = _as_float_rgb(clean_rgb)
+    if task == "identity":
+        trace = DegradationTrace(seed, "canonical", True, ())
+        return FactorizedDegradationSample(
+            canonical,
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            trace,
+        )
+    if rng.random() < settings.clean_probability:
+        target_stage: TargetStage = {
+            "fidelity": "artifact",
+            "photometric": "canonical",
+            "demoire": "photometric",
+            "reflection": "photometric",
+        }[task]
+        trace = DegradationTrace(seed, target_stage, True, ())
+        return FactorizedDegradationSample(
+            canonical,
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            canonical.copy(),
+            trace,
+        )
+
+    photometric, photo_steps = _photometric_stage(canonical, rng, settings)
+    artifact = photometric.copy()
+    artifact_mask: np.ndarray | None = None
+    artifact_steps: list[DegradationStep] = []
+    if task == "demoire":
+        from training.p3.degradations import synthetic_screen_recapture
+
+        pair = synthetic_screen_recapture(photometric, rng)
+        artifact = pair.input_rgb
+        artifact_steps.append(
+            DegradationStep(
+                "moire",
+                "artifact",
+                True,
+                float(pair.trace.get("severity", 0.5)),
+                _trace_parameters(pair.trace),
+            )
+        )
+    elif task == "reflection":
+        from training.p3.degradations import synthetic_reflection
+
+        pair = synthetic_reflection(photometric, rng)
+        artifact = pair.input_rgb
+        artifact_mask = pair.mask
+        artifact_steps.append(
+            DegradationStep(
+                "reflection",
+                "artifact",
+                True,
+                float(pair.trace.get("severity", 0.5)),
+                _trace_parameters(pair.trace),
+            )
+        )
+    else:
+        artifact_steps.extend(
+            (
+                DegradationStep("moire", "artifact", False, 0.0, {}),
+                DegradationStep("reflection", "artifact", False, 0.0, {}),
+            )
+        )
+
+    if task in {"photometric", "demoire", "reflection"}:
+        optical = artifact.copy()
+        observation = artifact.copy()
+        optical_steps: list[DegradationStep] = []
+        sensor_steps: list[DegradationStep] = []
+    else:
+        optical, optical_steps = _optical_stage(artifact, rng, settings)
+        observation, sensor_steps = _sensor_stage(optical, rng, settings)
+
+    target_stage: TargetStage
+    if task == "photometric":
+        input_rgb, target_rgb, target_stage = photometric, canonical, "canonical"
+    elif task in {"demoire", "reflection"}:
+        input_rgb, target_rgb, target_stage = artifact, photometric, "photometric"
+    else:
+        input_rgb, target_rgb, target_stage = observation, artifact, "artifact"
+    steps = tuple((*photo_steps, *artifact_steps, *optical_steps, *sensor_steps))
+    identity = not any(step.active for step in steps)
+    return FactorizedDegradationSample(
+        canonical.copy(),
+        photometric,
+        artifact,
+        optical,
+        observation,
+        np.ascontiguousarray(input_rgb),
+        np.ascontiguousarray(target_rgb),
+        DegradationTrace(seed, target_stage, identity, steps),
+        artifact_mask,
+    )
+
+
+def _photometric_stage(
+    image: np.ndarray,
+    rng: np.random.Generator,
+    config: CameraDegradationConfig,
+) -> tuple[np.ndarray, list[DegradationStep]]:
+    if not config.apply_photometric:
+        inactive = [
+            DegradationStep("exposure", "photometric", False, 0.0, {}),
+            DegradationStep("white_balance", "photometric", False, 0.0, {}),
+            DegradationStep("ccm", "photometric", False, 0.0, {}),
+            DegradationStep("tone", "photometric", False, 0.0, {}),
+            DegradationStep("illumination", "photometric", False, 0.0, {}),
+            DegradationStep("vignette", "photometric", False, 0.0, {}),
+        ]
+        return image.copy(), inactive
+    height, width = image.shape[:2]
+    linear = _srgb_to_linear(image)
+    ev = float(rng.uniform(config.min_exposure_stops, config.max_exposure_stops))
+    delta = rng.uniform(-config.max_white_balance_shift, config.max_white_balance_shift, 3)
+    gains = np.clip(1.0 + delta - delta.mean(), 0.65, 1.45).astype(np.float32)
+    field = _illumination_field(height, width, rng, config.max_illumination_gradient)
+    ccm_delta = rng.uniform(-config.max_ccm_residual, config.max_ccm_residual, (3, 3)).astype(
+        np.float32
+    )
+    # 对角占主导且每行总增益接近 1，避免 synthetic 产生不可信的强色彩混合。
+    ccm_delta *= np.array(
+        [[0.45, 0.2, 0.2], [0.2, 0.45, 0.2], [0.2, 0.2, 0.45]], np.float32
+    )
+    ccm = np.eye(3, dtype=np.float32) + ccm_delta
+    ccm /= np.maximum(ccm.sum(axis=1, keepdims=True), 1e-4)
+    linear = np.einsum("ij,hwj->hwi", ccm, linear)
+    vignette_strength = float(rng.uniform(0.0, config.max_vignette_strength))
+    center_x, center_y = rng.uniform(-0.08, 0.08, 2)
+    yy, xx = np.indices((height, width), dtype=np.float32)
+    normalized_x = xx / max(1, width - 1) * 2.0 - 1.0 - center_x
+    normalized_y = yy / max(1, height - 1) * 2.0 - 1.0 - center_y
+    radius2 = np.clip((normalized_x * normalized_x + normalized_y * normalized_y) / 2.0, 0.0, 1.0)
+    vignette = np.clip(1.0 - vignette_strength * radius2, 0.65, 1.0).astype(np.float32)
+    linear *= (2.0**ev) * gains[None, None] * field[..., None] * vignette[..., None]
+    output = _linear_to_srgb(np.clip(linear, 0.0, 1.0))
+    gamma = rng.uniform(
+        1.0 - config.max_tone_gamma_delta,
+        1.0 + config.max_tone_gamma_delta,
+        3,
+    ).astype(np.float32)
+    output = np.power(np.clip(output, 0.0, 1.0), gamma[None, None]).astype(np.float32)
+    steps = [
+        DegradationStep("exposure", "photometric", abs(ev) > 1e-6, min(1.0, abs(ev) / 1.0), {"ev": ev}),
+        DegradationStep(
+            "white_balance",
+            "photometric",
+            bool(np.max(np.abs(gains - 1.0)) > 1e-6),
+            min(1.0, float(np.max(np.abs(gains - 1.0))) / 0.25),
+            {"gains": gains.astype(float).tolist()},
+        ),
+        DegradationStep(
+            "ccm",
+            "photometric",
+            bool(np.max(np.abs(ccm - np.eye(3, dtype=np.float32))) > 1e-6),
+            min(1.0, float(np.max(np.abs(ccm - np.eye(3, dtype=np.float32)))) / 0.08),
+            {"matrix": ccm.astype(float).reshape(-1).tolist()},
+        ),
+        DegradationStep(
+            "tone",
+            "photometric",
+            bool(np.max(np.abs(gamma - 1.0)) > 1e-6),
+            min(1.0, float(np.max(np.abs(gamma - 1.0))) / max(config.max_tone_gamma_delta, 1e-6)),
+            {"gamma": gamma.astype(float).tolist()},
+        ),
+        DegradationStep(
+            "illumination",
+            "photometric",
+            bool(float(field.max() - field.min()) > 1e-6),
+            min(1.0, float(field.max() - field.min()) / 0.3),
+            {"range": float(field.max() - field.min())},
+        ),
+        DegradationStep(
+            "vignette",
+            "photometric",
+            vignette_strength > 1e-6,
+            min(1.0, vignette_strength / max(config.max_vignette_strength, 1e-6)),
+            {
+                "strength": vignette_strength,
+                "center_offset": [float(center_x), float(center_y)],
+            },
+        ),
+    ]
+    return np.ascontiguousarray(output), steps
+
+
+def _optical_stage(
+    image: np.ndarray,
+    rng: np.random.Generator,
+    config: CameraDegradationConfig,
+) -> tuple[np.ndarray, list[DegradationStep]]:
+    height, width = image.shape[:2]
+    output = image.copy()
+    scale = float(rng.uniform(config.min_resize_scale, config.max_resize_scale))
+    small = (max(2, round(width * scale)), max(2, round(height * scale)))
+    output = cv2.resize(output, small, interpolation=cv2.INTER_AREA)
+    output = cv2.resize(output, (width, height), interpolation=cv2.INTER_CUBIC)
+    defocus = float(rng.uniform(0.25, config.max_defocus_sigma)) if rng.random() < config.defocus_probability else 0.0
+    if defocus:
+        output = cv2.GaussianBlur(output, (0, 0), defocus, borderType=cv2.BORDER_REFLECT_101)
+    motion = int(rng.integers(3, config.max_motion_length + 1)) if rng.random() < config.motion_probability else 0
+    motion_angle = float(rng.uniform(0.0, 180.0))
+    if motion:
+        output = cv2.filter2D(output, -1, _motion_kernel(motion, motion_angle), borderType=cv2.BORDER_REFLECT_101)
+    ringing = float(rng.uniform(0.015, 0.09)) if rng.random() < config.ringing_probability else 0.0
+    if ringing:
+        blurred = cv2.GaussianBlur(output, (0, 0), 0.8)
+        output = np.clip(output + ringing * (output - blurred), 0.0, 1.0)
+    return np.ascontiguousarray(output.astype(np.float32)), [
+        DegradationStep("resize", "optical", scale < 0.999, 1.0 - scale, {"scale": scale}),
+        DegradationStep("defocus", "optical", defocus > 0.0, min(1.0, defocus / config.max_defocus_sigma), {"sigma": defocus}),
+        DegradationStep("motion", "optical", motion > 0, min(1.0, motion / config.max_motion_length), {"length": motion, "angle_degrees": motion_angle}),
+        DegradationStep("ringing", "optical", ringing > 0.0, min(1.0, ringing / 0.09), {"amount": ringing}),
+    ]
+
+
+def _sensor_stage(
+    image: np.ndarray,
+    rng: np.random.Generator,
+    config: CameraDegradationConfig,
+) -> tuple[np.ndarray, list[DegradationStep]]:
+    noise = float(rng.uniform(0.0, config.max_noise_std))
+    output = np.clip(image + rng.normal(0.0, noise, image.shape).astype(np.float32), 0.0, 1.0)
+    quality = int(rng.integers(config.min_jpeg_quality, config.max_jpeg_quality + 1)) if rng.random() < config.jpeg_probability else 100
+    if quality < 100:
+        output = _jpeg_round_trip_rgb(output, quality)
+    return np.ascontiguousarray(output), [
+        DegradationStep("noise", "sensor", noise > 1e-6, min(1.0, noise / max(config.max_noise_std, 1e-6)), {"std": noise}),
+        DegradationStep("jpeg", "sensor", quality < 100, (100 - quality) / max(1, 100 - config.min_jpeg_quality), {"quality": quality}),
+    ]
+
+
+def _trace_parameters(trace: dict[str, object]) -> dict[str, float | int | bool | str | list[float]]:
+    allowed = (float, int, bool, str)
+    return {
+        str(key): value
+        for key, value in trace.items()
+        if isinstance(value, allowed)
+        or (isinstance(value, list) and all(isinstance(item, allowed) for item in value))
+    }  # type: ignore[return-value]
 
 
 def _as_float_rgb(image_rgb: np.ndarray) -> np.ndarray:

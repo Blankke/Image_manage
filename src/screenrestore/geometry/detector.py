@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from .classic import detect_classic_candidates
+from .decoder import CornerDecoderSpec, decode_corner_logits
 from .rectify import order_corners
 from .types import QuadPrediction, QuadrilateralCandidate, TargetClass, TargetLayer
 
@@ -172,6 +173,7 @@ class OnnxQuadDetector:
             transform,
             image_rgb.shape,
         )
+        content_decoder_diagnostics = _heatmap_diagnostics(content_heatmaps)
         outer_presence_confidence = float(
             _sigmoid(np.asarray(outer_presence, np.float32)).reshape(-1)[0]
         )
@@ -184,6 +186,11 @@ class OnnxQuadDetector:
                 transform,
                 image_rgb.shape,
             )
+        outer_decoder_diagnostics = (
+            _heatmap_diagnostics(outer_heatmaps)
+            if outer_presence_confidence >= self.outer_presence_threshold
+            else None
+        )
         class_probabilities = _softmax(np.asarray(classes, dtype=np.float32).reshape(-1))
         class_index = int(np.argmax(class_probabilities))
         target_class = self.CLASS_ORDER[class_index]
@@ -194,11 +201,19 @@ class OnnxQuadDetector:
         boundary_map = _sigmoid(np.asarray(boundary_logits, np.float32).squeeze())
         candidates: list[QuadrilateralCandidate] = []
         if content_quad is not None:
+            minimum_peak_difference = min(
+                item["peak_difference"]
+                for item in content_decoder_diagnostics["corners"]
+            )
             candidates.append(
                 QuadrilateralCandidate(
                     content_quad,
                     float(np.mean(corner_confidences)),
-                    {"heatmap_mean": float(np.mean(corner_confidences))},
+                    {
+                        "heatmap_mean": float(np.mean(corner_confidences)),
+                        # 学习型候选不再假定 margin=1；使用 NMS 后最弱角的峰差。
+                        "candidate_margin": float(minimum_peak_difference),
+                    },
                     "quadlocator_onnx",
                     TargetLayer.CONTENT,
                 )
@@ -224,6 +239,10 @@ class OnnxQuadDetector:
             layer_confidence=_layer_confidence(content_quad, outer_quad, content_mask),
             content_mask=content_mask,
             boundary_map=boundary_map,
+            decoder_diagnostics={
+                "content": content_decoder_diagnostics,
+                "outer": outer_decoder_diagnostics,
+            },
             candidates=tuple(candidates),
             backend="quadlocator_onnx",
         )
@@ -283,45 +302,43 @@ def _decode_corner_heatmaps(
     transform: tuple[float, float, int, int, int],
     image_shape: tuple[int, ...],
 ) -> tuple[np.ndarray | None, tuple[float, float, float, float]]:
-    values = _sigmoid(np.asarray(heatmaps, dtype=np.float32))
-    if values.ndim != 4 or values.shape[0] != 1 or values.shape[1] != 4:
-        raise RuntimeError("角点热图输出必须为 1×4×H×W")
+    try:
+        decoded = decode_corner_logits(heatmaps)
+    except ValueError as exc:
+        raise RuntimeError("角点热图输出必须为 1×4×H×W") from exc
     scale_x, scale_y, offset_x, offset_y, input_size = transform
+    values = np.asarray(heatmaps)
     output_height, output_width = values.shape[2:]
     points: list[list[float]] = []
-    confidences: list[float] = []
-    for heatmap in values[0]:
-        confidence = float(np.max(heatmap))
-        confidences.append(confidence)
-        if confidence < 0.05:
-            continue
-        threshold = max(0.05, confidence * 0.55)
-        weights = np.where(heatmap >= threshold, heatmap, 0.0)
-        total = float(weights.sum())
-        if total <= 1e-8:
-            continue
-        yy, xx = np.indices(heatmap.shape, dtype=np.float32)
-        model_x = float((xx * weights).sum() / total) * (input_size - 1) / max(
-            1, output_width - 1
-        )
-        model_y = float((yy * weights).sum() / total) * (input_size - 1) / max(
-            1, output_height - 1
-        )
-        x = (model_x - offset_x) / max(scale_x, 1e-8)
-        y = (model_y - offset_y) / max(scale_y, 1e-8)
-        points.append(
-            [
-                float(np.clip(x, 0, image_shape[1] - 1)),
-                float(np.clip(y, 0, image_shape[0] - 1)),
-            ]
-        )
-    confidence_tuple = tuple(confidences)  # type: ignore[assignment]
+    if decoded.coordinates is not None:
+        for heatmap_x, heatmap_y in decoded.coordinates:
+            model_x = float(heatmap_x) * (input_size - 1) / max(1, output_width - 1)
+            model_y = float(heatmap_y) * (input_size - 1) / max(1, output_height - 1)
+            x = (model_x - offset_x) / max(scale_x, 1e-8)
+            y = (model_y - offset_y) / max(scale_y, 1e-8)
+            points.append(
+                [
+                    float(np.clip(x, 0, image_shape[1] - 1)),
+                    float(np.clip(y, 0, image_shape[0] - 1)),
+                ]
+            )
+    confidence_tuple = decoded.confidences
     if len(points) != 4:
         return None, confidence_tuple
     try:
         return order_corners(np.asarray(points, np.float32)), confidence_tuple
     except ValueError:
         return None, confidence_tuple
+
+
+def _heatmap_diagnostics(heatmaps: np.ndarray) -> dict[str, object]:
+    """把统一解码器诊断压缩成可安全序列化的小型结构。"""
+
+    decoded = decode_corner_logits(heatmaps, CornerDecoderSpec())
+    return {
+        "decoder": decoded.spec.to_dict(),
+        "corners": [item.to_dict() for item in decoded.diagnostics],
+    }
 
 
 def _layer_confidence(

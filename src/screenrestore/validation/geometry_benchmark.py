@@ -7,6 +7,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from scipy.stats import beta
 
 from screenrestore.geometry import LocalizationDecision, TargetClass, TargetLayer, order_corners
 
@@ -65,15 +66,17 @@ def evaluate_geometry_decision(
     if ground_truth.target_class == TargetClass.NONE:
         # hard negative 只要求无人值守路径停止。强行要求分类头恰好输出 none 会把
         # “因低置信度而正确拒绝”的安全行为误判为失败。
-        correct = not decision.accepted
+        strict_correct = not decision.accepted
         layer_correct = True
     else:
-        correct = bool(
-            decision.accepted
+        # strict_correct 描述候选四角/语义本身，与当前接受阈值解耦，供 validation
+        # 校准器和风险覆盖曲线学习；accepted precision 仍只在 accepted 子集上统计。
+        strict_correct = bool(
+            decision.proposed_corners is not None
             and class_correct
             and layer_correct
-            and selected_nce <= 0.02
-            and selected_iou >= 0.90
+            and selected_nce <= 0.01
+            and selected_iou >= 0.93
         )
     candidate_metrics = []
     if ground_truth.content_quad is not None:
@@ -90,9 +93,19 @@ def evaluate_geometry_decision(
                 }
             )
     candidate_metrics.sort(key=lambda item: (item["corner_nce"], -item["quad_iou"]))
+    refinement_outcome = "neutral"
+    if bool(decision.diagnostics.get("refinement_accepted", False)) is False:
+        refinement_outcome = "rolled_back"
+    elif decision.coarse_corners is not None and ground_truth.content_quad is not None:
+        coarse_nce, coarse_iou, _ = corner_metrics(decision.coarse_corners, ground_truth.content_quad)
+        if selected_nce < coarse_nce - 1e-5 and selected_iou > coarse_iou + 1e-5:
+            refinement_outcome = "improved"
+        elif selected_nce > coarse_nce + 1e-5 or selected_iou < coarse_iou - 1e-5:
+            refinement_outcome = "worsened"
     return {
         "accepted": decision.accepted,
-        "correct": correct,
+        "correct": strict_correct,
+        "strict_correct": strict_correct,
         "class_correct": class_correct,
         "layer_correct": layer_correct,
         "in_scope": ground_truth.in_scope,
@@ -100,6 +113,7 @@ def evaluate_geometry_decision(
         "quad_iou": round(selected_iou, 8),
         "max_corner_error_px": round(max_corner_error, 4),
         "confidence": round(decision.confidence, 6),
+        "refinement_outcome": refinement_outcome,
         "backend": decision.backend,
         "rejection_reasons": [reason.value for reason in decision.rejection_reasons],
         "candidates": candidate_metrics,
@@ -144,11 +158,28 @@ def aggregate_geometry_results(
         "iou_median": iou_median >= gate.iou_median_min,
         "iou_p05": iou_p05 >= gate.iou_p05_min,
     }
+    resolved_groups = group_ids if group_ids is not None else [
+        f"sample-{index}" for index in range(sample_count)
+    ]
+    accepted_group_results: dict[str, list[bool]] = {}
+    for group_id, item in zip(resolved_groups, results, strict=True):
+        if item["accepted"]:
+            accepted_group_results.setdefault(group_id, []).append(bool(item["strict_correct"]))
+    accepted_group_correct = [all(values) for values in accepted_group_results.values()]
+    group_failures = sum(not value for value in accepted_group_correct)
+    error_interval = binomial_interval(group_failures, len(accepted_group_correct))
     return {
         "status": "PASS" if all(gates.values()) else "FAIL",
         "sample_count": sample_count,
         "independent_group_count": independent_group_count,
         "accepted_count": len(accepted),
+        "independent_accepted_group_count": len(accepted_group_correct),
+        "independent_accepted_group_failures": group_failures,
+        "accepted_group_error_rate_95ci": error_interval,
+        "accepted_group_error_rate_95_one_sided_upper": error_interval["one_sided_upper"],
+        "supports_99_percent_precision_at_95_percent_confidence": bool(
+            accepted_group_correct and error_interval["one_sided_upper"] <= 0.01
+        ),
         "accepted_precision": round(accepted_precision, 8),
         "in_scope_coverage": round(coverage, 8),
         "wrong_layer_rate": round(wrong_layer_rate, 8),
@@ -165,6 +196,44 @@ def aggregate_geometry_results(
             "iou_p05_min": gate.iou_p05_min,
             "minimum_samples": gate.minimum_samples,
         },
+    }
+
+
+def binomial_interval(successes: int, trials: int, confidence: float = 0.95) -> dict[str, float]:
+    """返回精确双侧区间及单侧上界；successes 可表示错误次数。"""
+
+    if trials < 0 or successes < 0 or successes > trials:
+        raise ValueError("二项计数必须满足 0 <= successes <= trials")
+    if trials == 0:
+        return {
+            "estimate": 0.0,
+            "lower": 0.0,
+            "upper": 1.0,
+            "one_sided_upper": 1.0,
+            "confidence": confidence,
+        }
+    alpha = 1.0 - confidence
+    lower = (
+        0.0
+        if successes == 0
+        else float(beta.ppf(alpha / 2.0, successes, trials - successes + 1))
+    )
+    upper = (
+        1.0
+        if successes == trials
+        else float(beta.ppf(1.0 - alpha / 2.0, successes + 1, trials - successes))
+    )
+    one_sided_upper = (
+        1.0
+        if successes == trials
+        else float(beta.ppf(confidence, successes + 1, trials - successes))
+    )
+    return {
+        "estimate": successes / trials,
+        "lower": lower,
+        "upper": upper,
+        "one_sided_upper": one_sided_upper,
+        "confidence": confidence,
     }
 
 

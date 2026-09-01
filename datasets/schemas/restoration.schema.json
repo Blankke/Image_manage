@@ -2,30 +2,82 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://screenrestore.local/schemas/restoration.schema.json",
   "title": "ScreenRestore 专项恢复配对样本",
-  "description": "用于去噪、去模糊、光度校正、反光、去摩尔纹和保守超分的单条 JSONL 记录。图像路径相对 SCREENRESTORE_DATA_ROOT；同一 group_id 不得跨 split。",
+  "description": "P3 忠实恢复训练清单。图像路径相对 SCREENRESTORE_DATA_ROOT；subject_id、group_id、capture_session 任一维度均不得跨 split。",
   "type": "object",
-  "required": ["sample_id", "task", "split", "group_id", "capture_session", "input_image", "target_image", "source", "license"],
+  "required": ["sample_id", "task", "split", "subject_id", "group_id", "capture_session", "reference_type", "alignment", "artifact_labels", "artifact_severity", "degradation_trace", "input_image", "target_image", "device", "source", "license", "license_restriction"],
   "properties": {
     "sample_id": {"type": "string", "minLength": 1},
     "task": {
       "type": "string",
-      "enum": ["denoise", "deblur", "photometric", "reflection_single", "reflection_multiframe", "demoire", "super_resolution"]
+      "enum": ["fidelity", "photometric", "reflection_single", "reflection_multiframe", "demoire", "dewarp", "super_resolution", "router"]
     },
     "split": {"type": "string", "enum": ["train", "validation", "test"]},
+    "subject_id": {"type": "string", "minLength": 1},
     "group_id": {"type": "string", "minLength": 1},
     "capture_session": {"type": "string", "minLength": 1},
+    "reference_type": {"type": "string", "enum": ["exact_pair", "registered_pair", "synthetic", "identity", "weak_unpaired"]},
+    "alignment": {
+      "type": "object",
+      "required": ["method", "coordinate_space"],
+      "properties": {
+        "method": {"type": "string", "enum": ["identity", "homography", "dense_grid", "optical_flow", "manual"]},
+        "coordinate_space": {"type": "string", "enum": ["input", "rectified", "target"]},
+        "quality": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      },
+      "additionalProperties": false
+    },
+    "artifact_labels": {"type": "array", "items": {"type": "string", "enum": ["clean", "resize", "noise", "defocus", "motion", "jpeg", "ringing", "photometric", "moire", "reflection", "curvature"]}, "uniqueItems": true},
+    "artifact_severity": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+    "degradation_trace": {
+      "type": "object",
+      "required": ["version", "seed", "target_stage", "identity", "artifacts", "steps"],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "target_stage": {"type": "string", "enum": ["canonical", "photometric", "artifact", "optical", "observation"]},
+        "identity": {"type": "boolean"},
+        "artifacts": {"type": "object", "additionalProperties": {"type": "boolean"}},
+        "severity": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "stage", "active", "severity", "parameters"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "stage": {"type": "string", "enum": ["photometric", "artifact", "optical", "sensor"]},
+              "active": {"type": "boolean"},
+              "severity": {"type": "number", "minimum": 0, "maximum": 1},
+              "parameters": {"type": "object"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "input_image": {"type": "string", "minLength": 1},
     "target_image": {"type": "string", "minLength": 1},
     "reflection_mask": {"type": ["string", "null"]},
+    "moire_metadata": {"type": "object"},
+    "unresolved_mask": {"type": ["string", "null"]},
     "validity_mask": {"type": ["string", "null"]},
     "observed_frames": {"type": "array", "items": {"type": "string"}, "minItems": 1},
     "target_metadata": {"type": "object"},
+    "degradation_parameters": {"type": "object"},
+    "artifact_masks": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+    "photometric_parameters": {"type": "object"},
+    "lens_parameters": {"type": "object"},
+    "dense_backward_grid": {"type": "object"},
+    "camera_metadata": {"type": "object"},
+    "device": {"type": "string", "minLength": 1},
     "source": {"type": "string", "minLength": 1},
-    "license": {"type": "string", "minLength": 1}
+    "license": {"type": "string", "minLength": 1},
+    "license_restriction": {"type": "string", "enum": ["redistributable", "manifest_only", "private_local_only", "research_only"]}
   },
   "allOf": [
     {
-      "if": {"properties": {"task": {"const": "reflection_multiframe"}}},
+      "if": {"properties": {"task": {"const": "reflection_multiframe"}}, "required": ["task"]},
       "then": {"required": ["observed_frames"]}
     }
   ],

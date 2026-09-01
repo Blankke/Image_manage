@@ -25,7 +25,7 @@ from .dataset import Div2kHrDataset
 from .degradation import CameraDegradationConfig
 from .losses import fidelity_loss
 from .metrics import fidelity_metrics
-from .model import BoundedResidualNet
+from .model import BoundedResidualNet, FidelityNetV2
 from .train import _accumulate, _batch_to_device, _device, _mean, _progress
 
 
@@ -42,13 +42,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.batch_size < 1 or args.samples < 0:
         raise ValueError("batch-size 必须大于 0，samples 不能为负数")
     checkpoint = torch.load(args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False)
-    if checkpoint.get("model") != "BoundedResidualNet":
-        raise ValueError("checkpoint 不是 BoundedResidualNet")
-    model = BoundedResidualNet(
-        int(checkpoint["channels"]),
-        int(checkpoint["blocks"]),
-        float(checkpoint["max_delta"]),
-    )
+    if checkpoint.get("model") == "FidelityNetV2":
+        model: torch.nn.Module = FidelityNetV2(
+            int(checkpoint["channels"]),
+            max_delta=float(checkpoint["max_delta"]),
+        )
+    elif checkpoint.get("model") == "BoundedResidualNet":
+        model = BoundedResidualNet(
+            int(checkpoint["channels"]),
+            int(checkpoint["blocks"]),
+            float(checkpoint["max_delta"]),
+        )
+    else:
+        raise ValueError("checkpoint 不是受支持的 Fidelity 模型")
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     device = _device(args.device)
     model.to(device).eval()
@@ -58,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
         degradation=CameraDegradationConfig(**checkpoint["degradation"]),
         seed=args.seed,
         max_samples=args.samples,
+        preserve_photometric_nuisance=bool(
+            checkpoint.get("preserve_photometric_nuisance", False)
+        ),
     )
     dataset.set_epoch(0)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)

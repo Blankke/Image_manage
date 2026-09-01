@@ -41,6 +41,10 @@ DEFAULT_THRESHOLDS = {
     "combined": 0.68,
 }
 
+# P3 format v3 只扩展训练与 decoder 元数据，模型仍保持与 P2 v2 相同的
+# QuadLocatorS 7-output 契约，因此冻结 checkpoint 校准可安全共用。
+SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3})
+
 
 @dataclass(slots=True)
 class CalibrationValues:
@@ -72,8 +76,13 @@ def main(argv: list[str] | None = None) -> int:
         map_location="cpu",
         weights_only=False,
     )
-    if checkpoint.get("format_version") != 2:
-        raise RuntimeError("confidence calibration 只接受 P2 format_version=2 checkpoint")
+    checkpoint_format = checkpoint.get("format_version")
+    if checkpoint_format not in SUPPORTED_CHECKPOINT_FORMATS:
+        supported = ", ".join(str(value) for value in sorted(SUPPORTED_CHECKPOINT_FORMATS))
+        raise RuntimeError(
+            f"confidence calibration 只接受 format_version={supported} checkpoint；"
+            f"实际为 {checkpoint_format!r}"
+        )
     device = _device(args.device)
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
     model.load_state_dict(checkpoint["state_dict"], strict=True)

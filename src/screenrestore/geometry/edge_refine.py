@@ -22,6 +22,11 @@ class EdgeRefineParameters:
     min_valid_samples: int = 20
     max_corner_shift_ratio: float = 0.04
     minimum_support: float = 0.16
+    minimum_continuous_coverage: float = 0.18
+    minimum_normal_alignment: float = 0.45
+    max_residual_p95: float = 2.8
+    max_area_drift: float = 0.12
+    max_aspect_drift: float = 0.10
 
     def __post_init__(self) -> None:
         if not 0.002 <= self.band_ratio <= 0.08:
@@ -79,6 +84,7 @@ def refine_quad_edges(
 
     lines: list[np.ndarray] = []
     support: list[float] = []
+    edge_diagnostics: list[dict[str, float]] = []
     for index in range(4):
         edge = _fit_edge(
             coarse[index],
@@ -97,9 +103,10 @@ def refine_quad_edges(
                 corner_shifts=(0.0, 0.0, 0.0, 0.0),
                 reason=f"edge_{index}_insufficient",
             )
-        line, edge_support = edge
+        line, edge_support, diagnostics = edge
         lines.append(line)
         support.append(edge_support)
+        edge_diagnostics.append(diagnostics)
 
     intersections = []
     for index in range(4):
@@ -116,18 +123,44 @@ def refine_quad_edges(
     refined = order_corners(np.asarray(intersections, dtype=np.float32))
     shifts = np.linalg.norm(refined - coarse, axis=1)
     max_shift = params.max_corner_shift_ratio * diagonal
+    coarse_area = max(abs(float(cv2.contourArea(coarse))), 1e-6)
+    refined_area = abs(float(cv2.contourArea(refined)))
+    area_drift = abs(refined_area / coarse_area - 1.0)
+    coarse_aspect = _quad_aspect(coarse)
+    refined_aspect = _quad_aspect(refined)
+    aspect_drift = abs(refined_aspect / max(coarse_aspect, 1e-6) - 1.0)
     accepted = (
         quadrilateral_is_valid(refined, image_rgb.shape)
         and float(np.max(shifts)) <= max_shift
         and float(np.min(support)) >= params.minimum_support
+        and min(item["continuous_coverage"] for item in edge_diagnostics)
+        >= params.minimum_continuous_coverage
+        and min(item["normal_alignment"] for item in edge_diagnostics)
+        >= params.minimum_normal_alignment
+        and max(item["residual_p95"] for item in edge_diagnostics) <= params.max_residual_p95
+        and area_drift <= params.max_area_drift
+        and aspect_drift <= params.max_aspect_drift
     )
     reason = "" if accepted else "refinement_gate_failed"
+    outcome = "neutral"
+    if accepted and float(np.mean(shifts)) >= 0.25:
+        outcome = "improved"
+    elif not accepted:
+        outcome = "rolled_back"
     return EdgeRefinement(
         corners=refined if accepted else coarse,
         accepted=accepted,
         edge_support=tuple(float(value) for value in support),  # type: ignore[arg-type]
         corner_shifts=tuple(float(value) for value in shifts),  # type: ignore[arg-type]
         reason=reason,
+        residual_median=tuple(item["residual_median"] for item in edge_diagnostics),  # type: ignore[arg-type]
+        residual_p95=tuple(item["residual_p95"] for item in edge_diagnostics),  # type: ignore[arg-type]
+        continuous_coverage=tuple(item["continuous_coverage"] for item in edge_diagnostics),  # type: ignore[arg-type]
+        gradient_normal_alignment=tuple(item["normal_alignment"] for item in edge_diagnostics),  # type: ignore[arg-type]
+        boundary_consistency=tuple(item["boundary_consistency"] for item in edge_diagnostics),  # type: ignore[arg-type]
+        area_drift=float(area_drift),
+        aspect_drift=float(aspect_drift),
+        outcome=outcome,
     )
 
 
@@ -139,7 +172,7 @@ def _fit_edge(
     boundary: np.ndarray | None,
     band: int,
     params: EdgeRefineParameters,
-) -> tuple[np.ndarray, float] | None:
+) -> tuple[np.ndarray, float, dict[str, float]] | None:
     vector = end.astype(np.float64) - start.astype(np.float64)
     length = float(np.linalg.norm(vector))
     if length < 16:
@@ -150,6 +183,8 @@ def _fit_edge(
     offsets = np.arange(-band, band + 1, dtype=np.float64)
     points: list[np.ndarray] = []
     strengths: list[float] = []
+    alignments: list[float] = []
+    boundary_values: list[float] = []
     height, width = gradient_x.shape
     for position in np.linspace(0.04, 0.96, sample_count):
         base = start.astype(np.float64) + position * vector
@@ -167,6 +202,9 @@ def _fit_edge(
         peak = int(np.argmax(responses))
         points.append(np.array([xs[peak], ys[peak]], dtype=np.float64))
         strengths.append(float(responses[peak]))
+        magnitude = float(np.hypot(gradient_x[ys[peak], xs[peak]], gradient_y[ys[peak], xs[peak]]))
+        alignments.append(float(np.clip(responses[peak] / max(magnitude, 1e-8), 0.0, 1.0)))
+        boundary_values.append(float(boundary[ys[peak], xs[peak]]) if boundary is not None else 0.0)
     if len(points) < params.min_valid_samples:
         return None
     point_array = np.asarray(points, dtype=np.float64)
@@ -183,7 +221,37 @@ def _fit_edge(
         return None
     # Sobel 响应的 0.35 左右已经是很强的边；该归一化只用于接受/拒绝，不做概率解释。
     support = float(np.clip(np.median(strength_array[keep]) / 0.35, 0.0, 1.0))
-    return line, support
+    residuals = np.abs(point_array @ line[:2] + line[2])
+    kept_indices = np.flatnonzero(keep)
+    longest_run = _longest_consecutive_run(kept_indices)
+    alignment_array = np.asarray(alignments, np.float64)
+    boundary_array = np.asarray(boundary_values, np.float64)
+    diagnostics = {
+        "residual_median": float(np.median(residuals[keep])),
+        "residual_p95": float(np.percentile(residuals[keep], 95)),
+        "continuous_coverage": float(longest_run / max(1, sample_count)),
+        "normal_alignment": float(np.median(alignment_array[keep])),
+        "boundary_consistency": float(np.median(boundary_array[keep])) if boundary is not None else 0.0,
+    }
+    return line, support, diagnostics
+
+
+def _longest_consecutive_run(indices: np.ndarray) -> int:
+    if indices.size == 0:
+        return 0
+    differences = np.diff(indices)
+    boundaries = np.flatnonzero(differences != 1)
+    starts = np.r_[0, boundaries + 1]
+    ends = np.r_[boundaries + 1, len(indices)]
+    return int(np.max(ends - starts))
+
+
+def _quad_aspect(corners: np.ndarray) -> float:
+    top = float(np.linalg.norm(corners[1] - corners[0]))
+    bottom = float(np.linalg.norm(corners[2] - corners[3]))
+    left = float(np.linalg.norm(corners[3] - corners[0]))
+    right = float(np.linalg.norm(corners[2] - corners[1]))
+    return (top + bottom) / max(left + right, 1e-6)
 
 
 def _robust_total_least_squares(

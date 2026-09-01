@@ -332,5 +332,10 @@ python scripts/evaluate_paired.py
 - [开发记录](docs/DEVELOPMENT.md)
 - [参考项目清单](docs/REFERENCE_PROJECTS.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
+- [P3 实施计划](plan/p3.md)
+- [P3 数据采集](docs/P3_DATA_CAPTURE_GUIDE.md)
+- [P3 数据审计](docs/P3_DATA_AUDIT.md)
+- [P3 正式训练命令](docs/P3_TRAINING_COMMANDS.md)
+- [P3 当前结果](docs/P3_RESULTS.md)
 
 截图统一放在 `docs/screenshots/`，便于后续 Windows 原生构建时更新，不将用户输入图片作为截图素材。

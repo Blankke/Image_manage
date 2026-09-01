@@ -108,6 +108,15 @@ class AutomaticGeometryService:
             "refinement_reason": refinement.reason,
             "edge_support": [round(value, 6) for value in refinement.edge_support],
             "corner_shifts_px": [round(value, 4) for value in refinement.corner_shifts],
+            "refinement_outcome": refinement.outcome,
+            "refinement_residual_median_px": [round(value, 4) for value in refinement.residual_median],
+            "refinement_residual_p95_px": [round(value, 4) for value in refinement.residual_p95],
+            "refinement_continuous_coverage": [round(value, 6) for value in refinement.continuous_coverage],
+            "refinement_gradient_normal_alignment": [round(value, 6) for value in refinement.gradient_normal_alignment],
+            "refinement_boundary_consistency": [round(value, 6) for value in refinement.boundary_consistency],
+            "refinement_area_drift": round(refinement.area_drift, 6),
+            "refinement_aspect_drift": round(refinement.aspect_drift, 6),
+            "decoder": prediction.decoder_diagnostics,
         }
         if rejection_reasons:
             return LocalizationDecision(

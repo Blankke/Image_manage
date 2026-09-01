@@ -30,6 +30,11 @@ OUTPUT_NAMES = [
     "class_logits",
 ]
 
+# v2 与 v3 的网络结构及 7-output ONNX 契约相同；v3 仅增加了 P3 decoder、
+# loss profile 与 hard-sampling 元数据。导出器应按模型契约判断，不能把元数据
+# 版本升级误判为不兼容 checkpoint。
+SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3})
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -39,8 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     print("[####--------------------] 1/3 加载 checkpoint", file=sys.stderr)
     checkpoint = torch.load(args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False)
-    if checkpoint.get("format_version") != 2:
-        raise RuntimeError("只允许导出 format_version=2 的 7-output QuadLocator checkpoint")
+    checkpoint_format = checkpoint.get("format_version")
+    if checkpoint_format not in SUPPORTED_CHECKPOINT_FORMATS:
+        supported = ", ".join(str(value) for value in sorted(SUPPORTED_CHECKPOINT_FORMATS))
+        raise RuntimeError(
+            f"只允许导出 format_version={supported} 的 7-output QuadLocator checkpoint；"
+            f"实际为 {checkpoint_format!r}"
+        )
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()

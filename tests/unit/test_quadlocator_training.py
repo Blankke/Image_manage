@@ -244,7 +244,11 @@ def test_init_checkpoint_loads_p1_compatible_parameters_and_keeps_new_head(tmp_p
     assert torch.equal(new_model.stem[0].weight, old_model.stem[0].weight)
 
 
-def test_exported_onnx_uses_seven_output_contract(tmp_path) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize("format_version", [2, 3])
+def test_exported_onnx_uses_seven_output_contract(
+    tmp_path,  # type: ignore[no-untyped-def]
+    format_version: int,
+) -> None:
     ort = pytest.importorskip("onnxruntime")
     from training.quadlocator.export_onnx import OUTPUT_NAMES
     from training.quadlocator.export_onnx import main as export_onnx
@@ -255,7 +259,7 @@ def test_exported_onnx_uses_seven_output_contract(tmp_path) -> None:  # type: ig
     output = tmp_path / "model.onnx"
     torch.save(
         {
-            "format_version": 2,
+            "format_version": format_version,
             "width_multiplier": 0.5,
             "image_size": 128,
             "state_dict": model.state_dict(),

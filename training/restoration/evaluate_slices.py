@@ -28,7 +28,7 @@ from .dataset import Div2kHrDataset
 from .degradation import CameraDegradationConfig
 from .losses import fidelity_loss
 from .metrics import fidelity_metrics
-from .model import BoundedResidualNet
+from .model import BoundedResidualNet, FidelityNetV2
 from .train import _accumulate, _batch_to_device, _device, _mean, _progress
 
 
@@ -46,13 +46,19 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("batch-size 与 samples 必须大于 0")
     checkpoint_path = args.checkpoint.expanduser().resolve()
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if checkpoint.get("model") != "BoundedResidualNet":
-        raise ValueError("checkpoint 不是 BoundedResidualNet")
-    model = BoundedResidualNet(
-        int(checkpoint["channels"]),
-        int(checkpoint["blocks"]),
-        float(checkpoint["max_delta"]),
-    )
+    if checkpoint.get("model") == "FidelityNetV2":
+        model: torch.nn.Module = FidelityNetV2(
+            int(checkpoint["channels"]),
+            max_delta=float(checkpoint["max_delta"]),
+        )
+    elif checkpoint.get("model") == "BoundedResidualNet":
+        model = BoundedResidualNet(
+            int(checkpoint["channels"]),
+            int(checkpoint["blocks"]),
+            float(checkpoint["max_delta"]),
+        )
+    else:
+        raise ValueError("checkpoint 不是受支持的 Fidelity 模型")
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     device = _device(args.device)
     model.to(device).eval()
@@ -71,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
             device=device,
             identity_weight=float(checkpoint["identity_weight"]),
             edge_weight=float(checkpoint["edge_weight"]),
+            preserve_photometric_nuisance=bool(
+                checkpoint.get("preserve_photometric_nuisance", False)
+            ),
         )
         slices[name] = {"degradation": asdict(degradation), "metrics": metrics}
     _progress(len(configs), len(configs), "切片评估完成")
@@ -109,11 +118,17 @@ def evaluation_slices() -> dict[str, CameraDegradationConfig]:
         "max_exposure_stops": 0.0,
         "max_white_balance_shift": 0.0,
         "max_illumination_gradient": 0.0,
+        "max_ccm_residual": 0.0,
+        "max_tone_gamma_delta": 0.0,
+        "max_vignette_strength": 0.0,
         "min_jpeg_quality": 52,
         "max_jpeg_quality": 94,
     }
     return {
         "clean_identity": CameraDegradationConfig(**{**isolated, "clean_probability": 1.0}),
+        "resize": CameraDegradationConfig(
+            **{**isolated, "min_resize_scale": 0.55, "max_resize_scale": 0.80}
+        ),
         "noise_light": CameraDegradationConfig(**{**isolated, "max_noise_std": 0.008}),
         "noise_heavy": CameraDegradationConfig(**{**isolated, "max_noise_std": 0.03}),
         "defocus": CameraDegradationConfig(
@@ -139,7 +154,7 @@ def evaluation_slices() -> dict[str, CameraDegradationConfig]:
 
 
 def evaluate_slice(
-    model: BoundedResidualNet,
+    model: torch.nn.Module,
     hr_directory: Path,
     degradation: CameraDegradationConfig,
     *,
@@ -150,6 +165,7 @@ def evaluate_slice(
     device: torch.device,
     identity_weight: float,
     edge_weight: float,
+    preserve_photometric_nuisance: bool,
 ) -> dict[str, float]:
     """使用固定 epoch 与 seed 生成可复现的单个退化切片。"""
 
@@ -159,6 +175,7 @@ def evaluate_slice(
         degradation=degradation,
         seed=seed,
         max_samples=samples,
+        preserve_photometric_nuisance=preserve_photometric_nuisance,
     )
     dataset.set_epoch(0)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)

@@ -25,13 +25,14 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from .dataset import Div2kHrDataset, UnlabeledIdentityDataset
 from .degradation import CameraDegradationConfig
 from .losses import fidelity_loss, identity_loss
 from .metrics import fidelity_metrics
-from .model import BoundedResidualNet
+from .model import BoundedResidualNet, FidelityNetV2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,6 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--channels", type=int, default=32)
     parser.add_argument("--blocks", type=int, default=6)
     parser.add_argument("--max-delta", type=float, default=0.06)
+    parser.add_argument(
+        "--architecture",
+        choices=("bounded_residual_v1", "fidelity_v2"),
+        default="bounded_residual_v1",
+    )
+    parser.add_argument(
+        "--preserve-photometric-nuisance",
+        action="store_true",
+        help="P3：input/target 共享摄影 nuisance，Fidelity 只学习低层退化",
+    )
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--identity-weight", type=float, default=0.35)
     parser.add_argument("--edge-weight", type=float, default=0.15)
@@ -74,13 +85,14 @@ def main(argv: list[str] | None = None) -> int:
     _validate_args(args)
     _seed_everything(args.seed)
     device = _device(args.device)
-    degradation = CameraDegradationConfig()
+    degradation = CameraDegradationConfig(apply_photometric=not args.preserve_photometric_nuisance)
     train_data = Div2kHrDataset(
         args.train_hr_directory,
         patch_size=args.patch_size,
         degradation=degradation,
         seed=args.seed,
         max_samples=args.train_samples,
+        preserve_photometric_nuisance=args.preserve_photometric_nuisance,
     )
     validation_data = Div2kHrDataset(
         args.validation_hr_directory,
@@ -88,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         degradation=degradation,
         seed=args.seed + 1,
         max_samples=args.validation_samples,
+        preserve_photometric_nuisance=args.preserve_photometric_nuisance,
     )
     validation_data.set_epoch(0)
     private_identity_data = (
@@ -125,19 +138,23 @@ def main(argv: list[str] | None = None) -> int:
         if private_identity_data is not None
         else None
     )
-    model = BoundedResidualNet(args.channels, args.blocks, args.max_delta).to(device)
+    model: torch.nn.Module
+    if args.architecture == "fidelity_v2":
+        model = FidelityNetV2(args.channels, max_delta=args.max_delta).to(device)
+    else:
+        model = BoundedResidualNet(args.channels, args.blocks, args.max_delta).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     output_directory = args.output_directory.expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     run = {
-        "format_version": 1,
+        "format_version": 2,
         "kind": "fidelity_restoration_training",
         "train_hr_directory": str(args.train_hr_directory.expanduser().resolve()),
         "validation_hr_directory": str(args.validation_hr_directory.expanduser().resolve()),
         "train_samples": len(train_data),
         "validation_samples": len(validation_data),
-        "architecture": "BoundedResidualNet",
+        "architecture": type(model).__name__,
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
         "channels": args.channels,
         "blocks": args.blocks,
@@ -155,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "device": str(device),
         "degradation": asdict(degradation),
+        "preserve_photometric_nuisance": args.preserve_photometric_nuisance,
     }
     (output_directory / "run.json").write_text(
         json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -213,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _train_epoch(
-    model: BoundedResidualNet,
+    model: torch.nn.Module,
     loader: DataLoader[dict[str, torch.Tensor]],
     optimizer: torch.optim.Optimizer,
     device: torch.device,
@@ -231,7 +249,12 @@ def _train_epoch(
         _progress(batch_index - 1, len(loader), f"epoch {epoch}/{epochs} train")
         degraded, target = _batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
-        restored = model(degraded)
+        if isinstance(model, FidelityNetV2):
+            restored, _alpha, _budget, artifact_logits, artifact_severity = model.forward_training(
+                degraded
+            )
+        else:
+            restored = model(degraded)
         clean_restored = model(target)
         loss, parts = fidelity_loss(
             restored,
@@ -241,6 +264,18 @@ def _train_epoch(
             identity_weight=identity_weight,
             edge_weight=edge_weight,
         )
+        if isinstance(model, FidelityNetV2):
+            artifact_loss = F.binary_cross_entropy_with_logits(
+                artifact_logits,
+                batch["artifact_labels"].to(device),
+            )
+            severity_loss = F.smooth_l1_loss(
+                artifact_severity,
+                batch["artifact_severity"].to(device),
+            )
+            loss = loss + 0.08 * artifact_loss + 0.04 * severity_loss
+            parts["artifact_aux"] = float(artifact_loss.detach())
+            parts["severity_aux"] = float(severity_loss.detach())
         if private_iterator is not None:
             try:
                 private_batch = next(private_iterator)
@@ -261,7 +296,7 @@ def _train_epoch(
 
 
 def _validate_epoch(
-    model: BoundedResidualNet,
+    model: torch.nn.Module,
     loader: DataLoader[dict[str, torch.Tensor]],
     device: torch.device,
     epoch: int,
@@ -275,7 +310,12 @@ def _validate_epoch(
         for batch_index, batch in enumerate(loader, start=1):
             _progress(batch_index - 1, len(loader), f"epoch {epoch}/{epochs} validation")
             degraded, target = _batch_to_device(batch, device)
-            restored = model(degraded)
+            if isinstance(model, FidelityNetV2):
+                restored, _alpha, _budget, artifact_logits, artifact_severity = model.forward_training(
+                    degraded
+                )
+            else:
+                restored = model(degraded)
             clean_restored = model(target)
             loss, parts = fidelity_loss(
                 restored,
@@ -285,6 +325,18 @@ def _validate_epoch(
                 identity_weight=identity_weight,
                 edge_weight=edge_weight,
             )
+            if isinstance(model, FidelityNetV2):
+                artifact_loss = F.binary_cross_entropy_with_logits(
+                    artifact_logits,
+                    batch["artifact_labels"].to(device),
+                )
+                severity_loss = F.smooth_l1_loss(
+                    artifact_severity,
+                    batch["artifact_severity"].to(device),
+                )
+                loss = loss + 0.08 * artifact_loss + 0.04 * severity_loss
+                parts["artifact_aux"] = float(artifact_loss)
+                parts["severity_aux"] = float(severity_loss)
             parts["loss"] = float(loss)
             _accumulate(totals, parts)
             _accumulate(totals, fidelity_metrics(restored, target, clean_restored))
@@ -308,21 +360,23 @@ def _mean(totals: dict[str, float], count: int) -> dict[str, float]:
 
 
 def _checkpoint(
-    model: BoundedResidualNet,
+    model: torch.nn.Module,
     args: argparse.Namespace,
     degradation: CameraDegradationConfig,
     epoch: int,
     validation_metrics: dict[str, float],
 ) -> dict[str, object]:
     return {
-        "format_version": 1,
-        "model": "BoundedResidualNet",
+        "format_version": 2,
+        "model": type(model).__name__,
+        "architecture": args.architecture,
         "channels": args.channels,
         "blocks": args.blocks,
         "max_delta": args.max_delta,
         "patch_size": args.patch_size,
         "identity_weight": args.identity_weight,
         "edge_weight": args.edge_weight,
+        "preserve_photometric_nuisance": args.preserve_photometric_nuisance,
         "degradation": asdict(degradation),
         "state_dict": model.state_dict(),
         "epoch": epoch,
@@ -343,6 +397,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("private-identity-weight 必须位于 0..2")
     if args.private_identity_samples < 0:
         raise ValueError("private-identity-samples 不能为负数")
+    if args.architecture == "fidelity_v2" and (args.channels < 24 or args.channels % 8):
+        raise ValueError("fidelity_v2 channels 必须是不小于 24 的 8 倍数")
 
 
 def _device(requested: str) -> torch.device:
