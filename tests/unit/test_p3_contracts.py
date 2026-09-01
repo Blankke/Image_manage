@@ -63,6 +63,18 @@ def test_nms_second_peak_suppresses_primary_shoulder() -> None:
     assert all(item.peak_distance > 8.0 for item in decoded.diagnostics)
 
 
+def test_nms_second_peak_suppresses_diagonal_shoulder() -> None:
+    logits = np.full((1, 4, 17, 17), -9.0, np.float32)
+    logits[:, :, 5, 5] = 9.0
+    # 该点位于半径 3 的圆外、方形邻域内，仍属于同一个宽峰的肩部。
+    logits[:, :, 8, 8] = 8.0
+    logits[:, :, 14, 14] = 5.0
+    decoded = decode_corner_logits(logits, CornerDecoderSpec(nms_radius=3))
+    expected = 1.0 / (1.0 + np.exp(-5.0))
+    assert all(item.peak2 == pytest.approx(expected) for item in decoded.diagnostics)
+    assert all(item.peak_distance > 12.0 for item in decoded.diagnostics)
+
+
 def test_candidate_margin_and_entropy_are_data_dependent() -> None:
     ambiguous = _corner_logits()
     clear = ambiguous.copy()
@@ -204,6 +216,22 @@ def test_router_clean_bypass_and_mixed_review() -> None:
         {"moire": 0.8, "reflection": 0.8},
     )
     assert mixed.route == RestorationRoute.REVIEW
+
+
+def test_router_balanced_loss_prioritizes_sparse_positive() -> None:
+    torch = pytest.importorskip("torch")
+    from training.p3.train_specialist import _router_loss
+
+    logits = torch.zeros((1, 7), requires_grad=True)
+    labels = torch.zeros((1, 7))
+    labels[0, 0] = 1.0
+    severity = torch.full((1, 7), 0.5, requires_grad=True)
+    target = torch.zeros((1, 7))
+    target[0, 0] = 0.8
+    loss = _router_loss(logits, severity, labels, target)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert abs(float(logits.grad[0, 0])) > abs(float(logits.grad[0, 1])) * 5.0
 
 
 def test_restoration_schema_declares_p3_reference_types() -> None:

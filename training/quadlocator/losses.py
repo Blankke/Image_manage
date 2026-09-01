@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch.nn import functional as F
 
-from training.quadlocator.decoder import local_softargmax_corners
+from training.quadlocator.decoder import CornerDecoderSpec, local_softargmax_corners
 
 
 def quadlocator_loss(
@@ -164,7 +164,7 @@ def _tail_mean(values: torch.Tensor, fraction: float) -> torch.Tensor:
 
 
 def _peak_ambiguity_penalty(logits: torch.Tensor, present: torch.Tensor) -> torch.Tensor:
-    """在抑制主峰 3px 邻域后惩罚第二强峰，避免把 shoulder 当候选。"""
+    """按共享 decoder 的 NMS 邻域抑制主峰后惩罚第二强峰。"""
 
     probabilities = torch.sigmoid(logits)
     batch, corners, height, width = probabilities.shape
@@ -173,9 +173,11 @@ def _peak_ambiguity_penalty(logits: torch.Tensor, present: torch.Tensor) -> torc
     peak_x = peaks % width
     yy = torch.arange(height, device=logits.device).view(1, 1, height, 1)
     xx = torch.arange(width, device=logits.device).view(1, 1, 1, width)
-    keep = (xx - peak_x[:, :, None, None]).square() + (
-        yy - peak_y[:, :, None, None]
-    ).square() > 9
+    radius = CornerDecoderSpec().nms_radius
+    # 与产品 decoder 一致使用方形邻域，避免训练仍把对角 shoulder 当作第二峰。
+    keep = (torch.abs(xx - peak_x[:, :, None, None]) > radius) | (
+        torch.abs(yy - peak_y[:, :, None, None]) > radius
+    )
     peak1 = probabilities.reshape(batch, corners, -1).amax(dim=2)
     peak2 = (probabilities * keep.to(probabilities.dtype)).reshape(batch, corners, -1).amax(dim=2)
     ratio = peak2 / peak1.clamp_min(1e-6)

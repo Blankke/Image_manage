@@ -243,6 +243,7 @@ geometry_train() {
   local learning_rate="$5"
   local loss_profile="${6:-full}"
   local hard_sampling="${7:-1}"
+  local early_stopping_patience="${8:-0}"
   require_mps
   local output="$RUN_DIRECTORY/$stage_name"
   fresh_directory "$output"
@@ -264,6 +265,9 @@ geometry_train() {
   )
   if [[ "$hard_sampling" == "1" ]]; then
     arguments+=(--hard-sampling)
+  fi
+  if [[ "$early_stopping_patience" -gt 0 ]]; then
+    arguments+=(--early-stopping-patience "$early_stopping_patience")
   fi
   python -m training.quadlocator.train "${arguments[@]}"
   python -m training.quadlocator.export_onnx \
@@ -342,7 +346,7 @@ case "$STAGE" in
       "$RUN_DIRECTORY/geometry-b2/correctness-calibrator.json"
     ;;
   geometry-b5)
-    geometry_train geometry-b5 "${P3_B5_EPOCHS:-18}" 0 0 "${P3_B5_LEARNING_RATE:-2e-4}" full 1
+    geometry_train geometry-b5 "${P3_B5_EPOCHS:-18}" 0 0 "${P3_B5_LEARNING_RATE:-1e-4}" full 1 "${P3_B5_EARLY_STOPPING_PATIENCE:-5}"
     geometry_calibrate \
       "$RUN_DIRECTORY/geometry-b5/quadlocator-s.onnx" \
       "$RUN_DIRECTORY/geometry-b5/calibration"

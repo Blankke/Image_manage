@@ -88,7 +88,26 @@ def main(argv: list[str] | None = None) -> int:
             parts["loss"] = float(loss)
             _accumulate(totals, parts)
             _accumulate(totals, fidelity_metrics(restored, target, clean_restored))
+            # 同一固定退化输入是恢复有效性的必要基线；只报输出 PSNR 无法判断
+            # 模型是否优于保持原观测不动。
+            _accumulate(
+                totals,
+                {
+                    f"input_{name}": value
+                    for name, value in fidelity_metrics(degraded, target, target).items()
+                    if name != "identity_mae"
+                },
+            )
     _progress(len(loader), len(loader), "冻结 checkpoint 验证")
+    metrics = _mean(totals, len(loader))
+    metrics.update(
+        {
+            "psnr_gain_over_input": metrics["psnr"] - metrics["input_psnr"],
+            "ssim_gain_over_input": metrics["ssim"] - metrics["input_ssim"],
+            "color_error_reduction_255": metrics["input_color_error_255"]
+            - metrics["color_error_255"],
+        }
+    )
     result = {
         "format_version": 1,
         "kind": "fidelity_restoration_evaluation",
@@ -96,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         "hr_directory": str(args.hr_directory.expanduser().resolve()),
         "samples": len(dataset),
         "device": str(device),
-        "metrics": _mean(totals, len(loader)),
+        "metrics": metrics,
     }
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

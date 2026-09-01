@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-DECODER_VERSION = "quad-peak-local-softargmax-v1"
+DECODER_VERSION = "quad-peak-local-softargmax-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +114,13 @@ def _decode_one(heatmap: np.ndarray, spec: CornerDecoderSpec) -> CornerPeakDiagn
     peak1 = float(heatmap[peak_y, peak_x])
 
     suppressed = heatmap.copy()
-    yy, xx = np.ogrid[:height, :width]
-    suppressed[(xx - peak_x) ** 2 + (yy - peak_y) ** 2 <= spec.nms_radius**2] = -1.0
+    # 使用方形邻域覆盖局部 decoder 的完整窗口。旧版圆形邻域会漏掉
+    # (dx=3, dy=1) 等主峰肩部，把同一宽峰误报为第二候选。
+    y0_suppressed = max(0, peak_y - spec.nms_radius)
+    y1_suppressed = min(height, peak_y + spec.nms_radius + 1)
+    x0_suppressed = max(0, peak_x - spec.nms_radius)
+    x1_suppressed = min(width, peak_x + spec.nms_radius + 1)
+    suppressed[y0_suppressed:y1_suppressed, x0_suppressed:x1_suppressed] = -1.0
     second_index = int(np.argmax(suppressed))
     second_y, second_x = divmod(second_index, width)
     peak2 = max(0.0, float(suppressed[second_y, second_x]))

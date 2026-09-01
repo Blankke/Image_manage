@@ -78,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
                 logits, severity = model(image)
                 probabilities = torch.sigmoid(logits)
                 labels = batch["labels"].to(device)
+                false_positive_mask = (probabilities >= 0.5) & (labels < 0.5)
+                false_negative_mask = (probabilities < 0.5) & (labels >= 0.5)
                 false_positive = float((probabilities * (1.0 - labels)).max())
                 false_negative = float(((1.0 - probabilities) * labels).max())
                 output_image = image
@@ -90,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
                     "labels": labels[0].cpu().tolist(),
                     "false_positive": false_positive,
                     "false_negative": false_negative,
+                    "false_positive_count": int(false_positive_mask.sum()),
+                    "false_negative_count": int(false_negative_mask.sum()),
                 }
+                row = _router_row(batch, image, probabilities, severity)
             else:
                 target = batch["target"].to(device)
                 output_image = _restore(model, args.task, image)
@@ -98,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
                 score = float(torch.mean(torch.abs(output_image - target)))
                 identity_error = float(torch.mean(torch.abs(clean_output - target)))
                 router = None
+                row = _row(batch, image, output_image, target)
             residual = float(torch.mean(torch.abs(output_image - image)))
             records.append(
                 {
@@ -106,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                     "identity_error": identity_error,
                     "residual": residual,
                     "router": router,
-                    "row": _row(batch, image, output_image, target),
+                    "row": row,
                 }
             )
     _progress(len(loader), len(loader))
@@ -220,6 +226,70 @@ def _rgb(value: torch.Tensor) -> np.ndarray:
     ).astype(np.uint8)
 
 
+def _router_row(
+    batch: dict[str, torch.Tensor],
+    input_tensor: torch.Tensor,
+    probabilities: torch.Tensor,
+    severity: torch.Tensor,
+) -> np.ndarray:
+    """Router 可视化显示分类证据，不伪装成图像恢复前后对比。"""
+
+    input_rgb = _rgb(input_tensor)
+    height, width = input_rgb.shape[:2]
+    truth = batch["labels"][0].numpy() >= 0.5
+    target_severity = batch["severity"][0].numpy()
+    predicted = probabilities[0].detach().cpu().numpy()
+    predicted_severity = severity[0].detach().cpu().numpy()
+    labels = ArtifactRouterNet.labels
+
+    def panel(title: str, rows: list[tuple[str, tuple[int, int, int]]]) -> np.ndarray:
+        tile = np.full((height, width, 3), 18, np.uint8)
+        cv2.putText(tile, title, (5, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 180, 40), 1)
+        y = 29
+        for text, color in rows:
+            cv2.putText(tile, text, (5, y), cv2.FONT_HERSHEY_SIMPLEX, 0.30, color, 1)
+            y += 14
+        return tile
+
+    gt_rows = [
+        (f"{name[:7]} {target_severity[index]:.2f}", (80, 220, 80) if truth[index] else (130, 130, 130))
+        for index, name in enumerate(labels)
+    ]
+    probability_rows = [
+        (
+            f"{name[:7]} {predicted[index]:.2f}",
+            (80, 220, 80) if (predicted[index] >= 0.5) == truth[index] else (50, 70, 255),
+        )
+        for index, name in enumerate(labels)
+    ]
+    severity_rows = [
+        (f"{name[:7]} {predicted_severity[index]:.2f}", (200, 200, 200))
+        for index, name in enumerate(labels)
+    ]
+    error_rows = []
+    for index, name in enumerate(labels):
+        detected = predicted[index] >= 0.5
+        if detected and not truth[index]:
+            error_rows.append((f"FP {name}", (50, 70, 255)))
+        elif truth[index] and not detected:
+            error_rows.append((f"FN {name}", (50, 70, 255)))
+    if not error_rows:
+        error_rows.append(("classification OK", (80, 220, 80)))
+
+    image_tile = input_rgb.copy()
+    cv2.putText(image_tile, "input", (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 80, 20), 1)
+    return np.concatenate(
+        (
+            image_tile,
+            panel("GT / severity", gt_rows),
+            panel("probability", probability_rows),
+            panel("pred severity", severity_rows),
+            panel("decision errors", error_rows),
+        ),
+        axis=1,
+    )
+
+
 def _categories(
     records: list[dict[str, object]], task: str
 ) -> dict[str, dict[str, object]]:
@@ -228,18 +298,33 @@ def _categories(
         "best": ordered[0],
         "median": ordered[len(ordered) // 2],
         "worst": ordered[-1],
-        "identity-regression": max(records, key=lambda item: float(item["identity_error"])),
-        "strong-residual": max(records, key=lambda item: float(item["residual"])),
     }
     if task == "router":
-        output["router-false-positive"] = max(
-            records,
-            key=lambda item: float((item["router"] or {}).get("false_positive", 0.0)),  # type: ignore[union-attr]
+        false_positive_records = [
+            item
+            for item in records
+            if int((item["router"] or {}).get("false_positive_count", 0)) > 0  # type: ignore[union-attr]
+        ]
+        false_negative_records = [
+            item
+            for item in records
+            if int((item["router"] or {}).get("false_negative_count", 0)) > 0  # type: ignore[union-attr]
+        ]
+        if false_positive_records:
+            output["router-false-positive"] = max(
+                false_positive_records,
+                key=lambda item: float((item["router"] or {}).get("false_positive", 0.0)),  # type: ignore[union-attr]
+            )
+        if false_negative_records:
+            output["router-false-negative"] = max(
+                false_negative_records,
+                key=lambda item: float((item["router"] or {}).get("false_negative", 0.0)),  # type: ignore[union-attr]
+            )
+    else:
+        output["identity-regression"] = max(
+            records, key=lambda item: float(item["identity_error"])
         )
-        output["router-false-negative"] = max(
-            records,
-            key=lambda item: float((item["router"] or {}).get("false_negative", 0.0)),  # type: ignore[union-attr]
-        )
+        output["strong-residual"] = max(records, key=lambda item: float(item["residual"]))
     return output
 
 

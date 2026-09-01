@@ -46,6 +46,7 @@ from training.p3.models import (
 from training.restoration.degradation import factorized_degradation_graph
 
 _SUFFIXES = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+_ROUTER_POSITIVE_WEIGHT = 9.0
 
 
 class P3TrainingDataset(Dataset[dict[str, torch.Tensor]]):
@@ -300,7 +301,7 @@ def _loss(model: torch.nn.Module, task: str, batch: dict[str, torch.Tensor]) -> 
         return F.l1_loss(transmission, batch["target"]) + F.binary_cross_entropy(mask, batch["mask"]) + F.binary_cross_entropy(unresolved, batch["unresolved"]) + 2.0 * localized
     if task == "router":
         logits, severity = model(batch["input"])
-        return F.binary_cross_entropy_with_logits(logits, batch["labels"]) + F.smooth_l1_loss(severity, batch["severity"])
+        return _router_loss(logits, severity, batch["labels"], batch["severity"])
     restored = model(batch["input"])
     identity = model(batch["target"])
     return F.l1_loss(restored, batch["target"]) + 0.3 * F.l1_loss(identity, batch["target"]) + 0.1 * F.l1_loss(_gradient(restored), _gradient(batch["target"]))
@@ -316,6 +317,37 @@ def _model(task: str) -> torch.nn.Module:
     }[task]()
 
 
+def _router_loss(
+    logits: torch.Tensor,
+    severity: torch.Tensor,
+    labels: torch.Tensor,
+    severity_target: torch.Tensor,
+) -> torch.Tensor:
+    """平衡稀疏多标签监督，避免 Router 收敛到“全部无 artifact”。
+
+    synthetic 数据中每个 artifact 的边际正例率约 10%，因此正类 BCE 使用 9 倍权重。
+    severity 主要监督真实正类，负类只保留较轻的趋零约束。
+    """
+
+    positive_weight = torch.full(
+        (logits.shape[1],),
+        _ROUTER_POSITIVE_WEIGHT,
+        dtype=logits.dtype,
+        device=logits.device,
+    )
+    classification = F.binary_cross_entropy_with_logits(
+        logits,
+        labels,
+        pos_weight=positive_weight,
+    )
+    positive_count = labels.sum().clamp_min(1.0)
+    positive_severity = (
+        F.smooth_l1_loss(severity, severity_target, reduction="none") * labels
+    ).sum() / positive_count
+    negative_severity = (severity * (1.0 - labels)).mean()
+    return classification + 0.5 * positive_severity + 0.05 * negative_severity
+
+
 def _evaluate_frozen(
     model: torch.nn.Module,
     loader: DataLoader[dict[str, torch.Tensor]],
@@ -326,6 +358,14 @@ def _evaluate_frozen(
 
     model.eval()
     totals: dict[str, float] = {}
+    router_true_positive = torch.zeros(len(ArtifactRouterNet.labels), dtype=torch.int64)
+    router_false_positive = torch.zeros_like(router_true_positive)
+    router_false_negative = torch.zeros_like(router_true_positive)
+    router_true_negative = torch.zeros_like(router_true_positive)
+    router_clean_samples = 0
+    router_clean_false_positive_samples = 0
+    router_artifact_samples = 0
+    router_artifact_missed_samples = 0
     with torch.no_grad():
         for index, batch in enumerate(loader, 1):
             _progress(index - 1, len(loader), f"{task} frozen evaluation")
@@ -337,20 +377,25 @@ def _evaluate_frozen(
             elif task == "router":
                 logits, severity = model(batch["input"])
                 probability = torch.sigmoid(logits)
-                clean = batch["labels"].sum(dim=1) == 0
+                truth = batch["labels"] >= 0.5
+                predicted = probability >= 0.5
+                clean = ~truth.any(dim=1)
+                artifact = truth.any(dim=1)
+                router_true_positive += (predicted & truth).sum(dim=0).cpu()
+                router_false_positive += (predicted & ~truth).sum(dim=0).cpu()
+                router_false_negative += (~predicted & truth).sum(dim=0).cpu()
+                router_true_negative += (~predicted & ~truth).sum(dim=0).cpu()
+                router_clean_samples += int(clean.sum())
+                router_clean_false_positive_samples += int((predicted[clean].any(dim=1)).sum())
+                router_artifact_samples += int(artifact.sum())
+                router_artifact_missed_samples += int(
+                    (~(predicted[artifact] & truth[artifact]).any(dim=1)).sum()
+                )
                 values = {
                     "bce": float(F.binary_cross_entropy_with_logits(logits, batch["labels"])),
                     "severity_mae": float(torch.abs(severity - batch["severity"]).mean()),
                     "micro_accuracy_at_0_5": float(
-                        ((probability >= 0.5) == (batch["labels"] >= 0.5)).float().mean()
-                    ),
-                    "clean_false_positive_rate_at_0_5": float(
-                        (probability[clean] >= 0.5).any(dim=1).float().mean()
-                    )
-                    if bool(clean.any())
-                    else 0.0,
-                    "artifact_false_negative_rate_at_0_5": float(
-                        ((probability < 0.5) & (batch["labels"] >= 0.5)).any(dim=1).float().mean()
+                        (predicted == truth).float().mean()
                     ),
                 }
             else:
@@ -358,6 +403,14 @@ def _evaluate_frozen(
                 target = batch["target"]
                 clean_restored = _restore_for_evaluation(model, task, target)
                 values = _image_metrics(restored, target, clean_restored)
+                input_baseline = _image_metrics(batch["input"], target, target)
+                values.update(
+                    {
+                        f"input_{name}": value
+                        for name, value in input_baseline.items()
+                        if name != "identity_drift"
+                    }
+                )
                 if task == "demoire":
                     values["frequency_residual"] = float(
                         torch.mean(
@@ -395,7 +448,49 @@ def _evaluate_frozen(
             for name, value in values.items():
                 totals[name] = totals.get(name, 0.0) + float(value)
     _progress(len(loader), len(loader), f"{task} frozen evaluation")
-    metrics = {name: value / max(1, len(loader)) for name, value in totals.items()}
+    metrics: dict[str, object] = {
+        name: value / max(1, len(loader)) for name, value in totals.items()
+    }
+    if task == "router":
+        per_label: dict[str, dict[str, float | int]] = {}
+        recalls: list[float] = []
+        f1_values: list[float] = []
+        for index, name in enumerate(ArtifactRouterNet.labels):
+            true_positive = int(router_true_positive[index])
+            false_positive = int(router_false_positive[index])
+            false_negative = int(router_false_negative[index])
+            true_negative = int(router_true_negative[index])
+            precision = true_positive / max(1, true_positive + false_positive)
+            recall = true_positive / max(1, true_positive + false_negative)
+            f1 = 2.0 * precision * recall / max(1e-12, precision + recall)
+            recalls.append(recall)
+            f1_values.append(f1)
+            per_label[name] = {
+                "precision_at_0_5": precision,
+                "recall_at_0_5": recall,
+                "f1_at_0_5": f1,
+                "support": true_positive + false_negative,
+                "true_negative": true_negative,
+            }
+        metrics.update(
+            {
+                "macro_recall_at_0_5": float(np.mean(recalls)),
+                "macro_f1_at_0_5": float(np.mean(f1_values)),
+                "clean_false_positive_rate_at_0_5": router_clean_false_positive_samples
+                / max(1, router_clean_samples),
+                "artifact_false_negative_rate_at_0_5": router_artifact_missed_samples
+                / max(1, router_artifact_samples),
+                "per_label": per_label,
+            }
+        )
+    elif task not in {"dewarp"}:
+        metrics.update(
+            {
+                "psnr_gain_over_input": float(metrics["psnr"]) - float(metrics["input_psnr"]),
+                "ssim_gain_over_input": float(metrics["ssim"]) - float(metrics["input_ssim"]),
+                "mae_reduction_over_input": float(metrics["input_mae"]) - float(metrics["mae"]),
+            }
+        )
     return {
         "format_version": 1,
         "kind": "p3_specialist_evaluation",
