@@ -151,6 +151,9 @@ class EdgeRefinement:
     accepted: bool
     edge_support: tuple[float, float, float, float]
     corner_shifts: tuple[float, float, float, float]
+    # 精修门拒绝时 ``corners`` 会回滚为 coarse。审计仍需看到门前拟合结果，
+    # 因此单独保留 attempted_corners；它只用于诊断，不进入产品输出。
+    attempted_corners: np.ndarray | None = None
     reason: str = ""
     residual_median: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     residual_p95: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
@@ -166,6 +169,11 @@ class EdgeRefinement:
         if corners.shape != (4, 2) or not np.all(np.isfinite(corners)):
             raise ValueError("精修四边形必须是有限的 4×2 数组")
         object.__setattr__(self, "corners", corners.copy())
+        if self.attempted_corners is not None:
+            attempted = np.asarray(self.attempted_corners, dtype=np.float32)
+            if attempted.shape != (4, 2) or not np.all(np.isfinite(attempted)):
+                raise ValueError("门前精修四边形必须是有限的 4×2 数组")
+            object.__setattr__(self, "attempted_corners", attempted.copy())
         if self.outcome not in {"improved", "neutral", "worsened", "rolled_back"}:
             raise ValueError("精修 outcome 必须为 improved/neutral/worsened/rolled_back")
 
@@ -243,7 +251,9 @@ class LocalizationDecision:
                         ),
                         0.0,
                         1.0,
-                    ).astype(float).tolist()
+                    )
+                    .astype(float)
+                    .tolist()
                     if self.outer_corners is not None and image_shape is not None
                     else None
                 )

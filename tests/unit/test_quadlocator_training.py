@@ -105,7 +105,12 @@ def test_dataset_can_limit_samples_for_reproducible_smoke_runs(tmp_path) -> None
     from training.quadlocator.generate_synthetic import main as generate_synthetic
 
     data_directory = tmp_path / "quad-data"
-    assert generate_synthetic(["--output-directory", str(data_directory), "--count", "12", "--size", "128"]) == 0
+    assert (
+        generate_synthetic(
+            ["--output-directory", str(data_directory), "--count", "12", "--size", "128"]
+        )
+        == 0
+    )
 
     dataset = QuadDataset(
         data_directory / "manifest.jsonl",
@@ -139,7 +144,9 @@ def test_synthetic_texture_sources_are_isolated_by_split(tmp_path) -> None:
     assert moved_assignment == original_assignment
 
 
-def _loss_tensors(*, outer_present: bool) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+def _loss_tensors(
+    *, outer_present: bool
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     outputs = {
         "content_corner_heatmaps": torch.zeros(1, 4, 8, 8, requires_grad=True),
         "outer_corner_heatmaps": torch.zeros(1, 4, 8, 8, requires_grad=True),
@@ -189,6 +196,233 @@ def test_outer_present_trains_presence_heatmap_and_coordinates() -> None:
     assert torch.count_nonzero(outputs["outer_presence_logits"].grad) > 0
     assert torch.count_nonzero(outputs["outer_corner_heatmaps"].grad) > 0
     assert metrics["outer_corner_geometry"] > 0
+
+
+def test_content_only_loss_does_not_backpropagate_other_heads() -> None:
+    """G1 的 total 只能连接 content heatmap，禁止其它任务偷偷影响共享优化。"""
+
+    from training.quadlocator.losses import quadlocator_loss
+
+    outputs, targets = _loss_tensors(outer_present=True)
+    loss, metrics = quadlocator_loss(outputs, targets, profile="content_only")
+    loss.backward()
+
+    assert metrics.keys() == {"total", "content_heatmap", "corner_geometry"}
+    assert outputs["content_corner_heatmaps"].grad is not None
+    for name in (
+        "outer_corner_heatmaps",
+        "content_mask_logits",
+        "boundary_logits",
+        "presence_logits",
+        "outer_presence_logits",
+        "class_logits",
+    ):
+        assert outputs[name].grad is None
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_metrics"),
+    (
+        ("content_heatmap_only", {"total", "content_heatmap"}),
+        ("content_coordinate_only", {"total", "corner_geometry"}),
+    ),
+)
+def test_content_loss_components_are_independently_auditable(
+    profile: str, expected_metrics: set[str]
+) -> None:
+    """G3.5 必须能将 heatmap 与 local-softargmax 坐标梯度独立复现。"""
+
+    from training.quadlocator.losses import quadlocator_loss
+
+    outputs, targets = _loss_tensors(outer_present=True)
+    loss, metrics = quadlocator_loss(outputs, targets, profile=profile)
+    loss.backward()
+
+    assert metrics.keys() == expected_metrics
+    assert outputs["content_corner_heatmaps"].grad is not None
+    for name in (
+        "outer_corner_heatmaps",
+        "content_mask_logits",
+        "boundary_logits",
+        "presence_logits",
+        "outer_presence_logits",
+        "class_logits",
+    ):
+        assert outputs[name].grad is None
+
+
+def test_content_mask_loss_only_backpropagates_content_and_mask() -> None:
+    """G2 只允许 content corner 与 content mask 共同影响共享优化。"""
+
+    from training.quadlocator.losses import quadlocator_loss
+
+    outputs, targets = _loss_tensors(outer_present=True)
+    loss, metrics = quadlocator_loss(outputs, targets, profile="content_mask")
+    loss.backward()
+
+    assert metrics.keys() == {"total", "content_heatmap", "mask", "corner_geometry"}
+    assert outputs["content_corner_heatmaps"].grad is not None
+    assert outputs["content_mask_logits"].grad is not None
+    for name in (
+        "outer_corner_heatmaps",
+        "boundary_logits",
+        "presence_logits",
+        "outer_presence_logits",
+        "class_logits",
+    ):
+        assert outputs[name].grad is None
+
+
+def test_content_boundary_loss_only_backpropagates_content_and_boundary() -> None:
+    """G3 只允许 content corner 与 boundary 共同影响共享优化。"""
+
+    from training.quadlocator.losses import quadlocator_loss
+
+    outputs, targets = _loss_tensors(outer_present=True)
+    loss, metrics = quadlocator_loss(outputs, targets, profile="content_boundary")
+    loss.backward()
+
+    assert metrics.keys() == {"total", "content_heatmap", "boundary", "corner_geometry"}
+    assert outputs["content_corner_heatmaps"].grad is not None
+    assert outputs["boundary_logits"].grad is not None
+    for name in (
+        "outer_corner_heatmaps",
+        "content_mask_logits",
+        "presence_logits",
+        "outer_presence_logits",
+        "class_logits",
+    ):
+        assert outputs[name].grad is None
+
+
+def test_content_backbone_scope_freezes_all_non_content_heads() -> None:
+    from training.quadlocator.model import QuadLocatorS
+    from training.quadlocator.train import _configure_trainable_scope
+
+    model = QuadLocatorS(width_multiplier=0.5)
+    frozen = _configure_trainable_scope(model, "content_backbone")
+
+    assert "content_corner_head" not in frozen
+    assert all(parameter.requires_grad for parameter in model.content_corner_head.parameters())
+    assert all(parameter.requires_grad for parameter in model.stem.parameters())
+    for name in frozen:
+        assert not any(parameter.requires_grad for parameter in getattr(model, name).parameters())
+
+
+def test_content_mask_backbone_scope_keeps_only_content_and_mask_heads() -> None:
+    from training.quadlocator.model import QuadLocatorS
+    from training.quadlocator.train import _configure_trainable_scope
+
+    model = QuadLocatorS(width_multiplier=0.5)
+    frozen = _configure_trainable_scope(model, "content_mask_backbone")
+
+    assert all(parameter.requires_grad for parameter in model.content_corner_head.parameters())
+    assert all(parameter.requires_grad for parameter in model.content_mask_head.parameters())
+    assert all(parameter.requires_grad for parameter in model.stem.parameters())
+    for name in frozen:
+        assert not any(parameter.requires_grad for parameter in getattr(model, name).parameters())
+
+
+def test_content_boundary_backbone_scope_keeps_only_content_and_boundary_heads() -> None:
+    from training.quadlocator.model import QuadLocatorS
+    from training.quadlocator.train import _configure_trainable_scope
+
+    model = QuadLocatorS(width_multiplier=0.5)
+    frozen = _configure_trainable_scope(model, "content_boundary_backbone")
+
+    assert all(parameter.requires_grad for parameter in model.content_corner_head.parameters())
+    assert all(parameter.requires_grad for parameter in model.boundary_head.parameters())
+    assert all(parameter.requires_grad for parameter in model.stem.parameters())
+    for name in frozen:
+        assert not any(parameter.requires_grad for parameter in getattr(model, name).parameters())
+
+
+def test_p4_loss_profiles_publish_only_their_participating_losses() -> None:
+    from training.quadlocator.train import _participating_losses
+
+    assert _participating_losses("content_only") == [
+        "content_heatmap",
+        "content_corner_geometry",
+    ]
+    assert _participating_losses("content_heatmap_only") == ["content_heatmap"]
+    assert _participating_losses("content_coordinate_only") == ["content_corner_geometry"]
+    assert _participating_losses("content_mask") == [
+        "content_heatmap",
+        "content_mask",
+        "content_corner_geometry",
+    ]
+    assert _participating_losses("content_boundary") == [
+        "content_heatmap",
+        "balanced_boundary",
+        "content_corner_geometry",
+    ]
+
+
+def test_geometry_selection_rejects_iou_tail_collapse_for_tiny_nce_gain() -> None:
+    from training.quadlocator.train import _geometry_selection_key
+
+    stable = {
+        "content_corner_nce_p95": 0.154,
+        "content_iou_p05": 0.088,
+        "content_iou_median": 0.677,
+        "content_strict_correct_rate": 0.011,
+    }
+    collapsed = {
+        "content_corner_nce_p95": 0.151,
+        "content_iou_p05": 0.0,
+        "content_iou_median": 0.652,
+        "content_strict_correct_rate": 0.007,
+    }
+
+    assert _geometry_selection_key(stable) > _geometry_selection_key(collapsed)
+
+
+def test_geometry_tail_watchdog_requires_both_tail_regressions() -> None:
+    from training.quadlocator.train import _is_geometry_tail_collapse
+
+    reference = {"content_corner_nce_p95": 0.154, "content_iou_p05": 0.153}
+    assert _is_geometry_tail_collapse(
+        {"content_corner_nce_p95": 0.21, "content_iou_p05": 0.09},
+        reference,
+        nce_p95_ratio=1.30,
+        iou_p05_ratio=0.65,
+    )
+    assert not _is_geometry_tail_collapse(
+        {"content_corner_nce_p95": 0.21, "content_iou_p05": 0.20},
+        reference,
+        nce_p95_ratio=1.30,
+        iou_p05_ratio=0.65,
+    )
+    assert not _is_geometry_tail_collapse(
+        {"content_corner_nce_p95": 0.16, "content_iou_p05": 0.09},
+        reference,
+        nce_p95_ratio=1.30,
+        iou_p05_ratio=0.65,
+    )
+
+
+def test_best_geometry_eligibility_keeps_tail_safe_warm_start() -> None:
+    from training.quadlocator.train import _is_geometry_eligible
+
+    reference = {"content_corner_nce_p95": 0.154, "content_iou_p05": 0.153}
+    assert _is_geometry_eligible(
+        {"content_corner_nce_p95": 0.160, "content_iou_p05": 0.170},
+        reference,
+        nce_p95_ratio=1.10,
+        iou_p05_ratio=0.90,
+    )
+    assert not _is_geometry_eligible(
+        {"content_corner_nce_p95": 0.201, "content_iou_p05": 0.170},
+        reference,
+        nce_p95_ratio=1.10,
+        iou_p05_ratio=0.90,
+    )
+    assert not _is_geometry_eligible(
+        {"content_corner_nce_p95": 0.160, "content_iou_p05": 0.099},
+        reference,
+        nce_p95_ratio=1.10,
+        iou_p05_ratio=0.90,
+    )
 
 
 def test_validation_selection_prefers_rejecting_ambiguous_target() -> None:
@@ -273,7 +507,9 @@ def test_exported_onnx_uses_seven_output_contract(
 
 
 class _FakeOnnxSession:
-    def __init__(self, _path: str, *, providers: list[str], outer_logit: float = -8.0, old: bool = False) -> None:
+    def __init__(
+        self, _path: str, *, providers: list[str], outer_logit: float = -8.0, old: bool = False
+    ) -> None:
         _ = providers
         self.outer_logit = outer_logit
         names = [
@@ -363,9 +599,7 @@ def test_runtime_high_outer_presence_wrong_quad_triggers_layer_ambiguity(
     prediction = detector_module.OnnxQuadDetector(model_path).predict(
         np.zeros((128, 128, 3), np.uint8)
     )
-    _score, reasons, _diagnostics = ConfidencePolicy().assess(
-        prediction, None, (128, 128, 3)
-    )
+    _score, reasons, _diagnostics = ConfidencePolicy().assess(prediction, None, (128, 128, 3))
 
     assert prediction.outer_quad is not None
     assert prediction.layer_confidence == 0.0
@@ -405,7 +639,10 @@ def test_augmentation_updates_image_and_quad_with_same_homography(monkeypatch) -
 
     assert augmented_quad is not None
     red_mask = (augmented[:, :, 0] > 128).astype(np.uint8)
-    contour = max(cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0], key=cv2.contourArea)
+    contour = max(
+        cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0],
+        key=cv2.contourArea,
+    )
     predicted_mask = np.zeros((128, 128), np.uint8)
     cv2.fillConvexPoly(predicted_mask, np.rint(augmented_quad * 127).astype(np.int32), 1)
     observed_mask = np.zeros((128, 128), np.uint8)
@@ -413,6 +650,80 @@ def test_augmentation_updates_image_and_quad_with_same_homography(monkeypatch) -
     intersection = np.logical_and(predicted_mask, observed_mask).sum()
     union = np.logical_or(predicted_mask, observed_mask).sum()
     assert intersection / union > 0.96
+
+
+def test_augmentation_modes_separate_geometry_and_photometry(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import training.quadlocator.dataset as dataset_module
+
+    image = np.full((128, 128, 3), 100, np.uint8)
+    cv2.rectangle(image, (32, 32), (95, 95), (180, 20, 20), -1)
+    quad = np.array([[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]], np.float32)
+    matrix = np.array([[1.0, 0.0, 8.0], [0.0, 1.0, 4.0], [0.0, 0.0, 1.0]], np.float32)
+    monkeypatch.setattr(dataset_module, "_sample_homography", lambda *_args: matrix)
+    monkeypatch.setattr(
+        dataset_module,
+        "_photometric_augmentation",
+        lambda value, _rng: np.clip(value.astype(np.int16) + 10, 0, 255).astype(np.uint8),
+    )
+
+    photo, photo_quad, _ = dataset_module._augment_sample(
+        image, quad, None, np.random.default_rng(7), mode="photometric"
+    )
+    geometric, geometric_quad, _ = dataset_module._augment_sample(
+        image, quad, None, np.random.default_rng(7), mode="geometric"
+    )
+
+    assert np.array_equal(photo_quad, quad)
+    assert np.array_equal(photo[0, 0], np.array([110, 110, 110], np.uint8))
+    assert geometric_quad is not None
+    assert not np.array_equal(geometric_quad, quad)
+    assert not np.array_equal(geometric, image)
+
+
+def test_dataset_geometric_augmentation_updates_model_input_and_quad(
+    tmp_path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """回归：几何增强后的模型输入与监督四角必须使用同一变换。"""
+
+    import training.quadlocator.dataset as dataset_module
+    from PIL import Image
+    from training.quadlocator.dataset import QuadDataset
+
+    image = np.full((128, 128, 3), 30, np.uint8)
+    quad = np.array([[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]], np.float32)
+    cv2.fillConvexPoly(image, np.rint(quad * 127).astype(np.int32), (240, 20, 20))
+    Image.fromarray(image).save(tmp_path / "image.png")
+    (tmp_path / "manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "image": "image.png",
+                "split": "train",
+                "present": True,
+                "target_class": "artwork",
+                "content_quad": quad.tolist(),
+                "outer_quad": None,
+                "group_id": "group-1",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    matrix = np.array([[1.0, 0.0, 16.0], [0.0, 1.0, 8.0], [0.0, 0.0, 1.0]], np.float32)
+    monkeypatch.setattr(dataset_module, "_sample_homography", lambda *_args: matrix)
+
+    baseline = QuadDataset(
+        tmp_path / "manifest.jsonl", split="train", image_size=128, augmentation_mode="none"
+    )[0]
+    augmented = QuadDataset(
+        tmp_path / "manifest.jsonl", split="train", image_size=128, augmentation_mode="geometric"
+    )[0]
+
+    assert not torch.equal(augmented["image"], baseline["image"])
+    assert not torch.equal(augmented["content_corners"], baseline["content_corners"])
+    observed = augmented["image"][0].numpy() > 0.7
+    yy, xx = np.where(observed)
+    observed_center = np.array([xx.mean() / 127.0, yy.mean() / 127.0], np.float32)
+    assert np.allclose(observed_center, augmented["content_corners"].numpy().mean(axis=0), atol=0.03)
 
 
 def test_source_group_balanced_sampler_only_uses_dataset_split(tmp_path) -> None:  # type: ignore[no-untyped-def]

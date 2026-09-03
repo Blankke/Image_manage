@@ -16,8 +16,21 @@ def quadlocator_loss(
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """组合角点、mask、boundary、存在性、类别与坐标一致性损失。"""
 
-    if profile not in {"p2", "boundary", "tail", "full"}:
-        raise ValueError("loss profile 必须为 p2/boundary/tail/full")
+    if profile not in {
+        "content_only",
+        "content_heatmap_only",
+        "content_coordinate_only",
+        "content_mask",
+        "content_boundary",
+        "p2",
+        "boundary",
+        "tail",
+        "full",
+    }:
+        raise ValueError(
+            "loss profile 必须为 content_only/content_heatmap_only/content_coordinate_only/"
+            "content_mask/content_boundary/p2/boundary/tail/full"
+        )
 
     content_per_sample = _gaussian_focal_loss(
         outputs["content_corner_heatmaps"], targets["content_corner_heatmaps"]
@@ -39,9 +52,7 @@ def quadlocator_loss(
         if profile in {"p2", "tail"}
         else _balanced_boundary_loss(outputs["boundary_logits"], targets["boundary"])
     )
-    presence = F.binary_cross_entropy_with_logits(
-        outputs["presence_logits"], targets["presence"]
-    )
+    presence = F.binary_cross_entropy_with_logits(outputs["presence_logits"], targets["presence"])
     outer_presence = F.binary_cross_entropy_with_logits(
         outputs["outer_presence_logits"], targets["outer_present"]
     )
@@ -54,7 +65,52 @@ def quadlocator_loss(
         reduction="none",
     ).mean(dim=(1, 2))
     present_weights = targets["presence"].reshape(-1)
-    corner_geometry = (corner_per_sample * present_weights).sum() / present_weights.sum().clamp_min(1.0)
+    corner_geometry = (corner_per_sample * present_weights).sum() / present_weights.sum().clamp_min(
+        1.0
+    )
+    if profile == "content_heatmap_only":
+        # G3.5 overfit 语义诊断：只测 Gaussian focal target 是否可被固定小集拟合。
+        total = 2.0 * content_heatmap
+        return total, {
+            "total": float(total.detach()),
+            "content_heatmap": float(content_heatmap.detach()),
+        }
+    if profile == "content_coordinate_only":
+        # G3.5 overfit 语义诊断：隔离 local soft-argmax → SmoothL1 的梯度链路。
+        total = 1.2 * corner_geometry
+        return total, {
+            "total": float(total.detach()),
+            "corner_geometry": float(corner_geometry.detach()),
+        }
+    if profile == "content_only":
+        # G1 只允许 content heatmap 与其坐标损失影响优化器。其它 head 既不参与
+        # total，也不借 consistency loss 间接改写共享特征。
+        total = 2.0 * content_heatmap + 1.2 * corner_geometry
+        return total, {
+            "total": float(total.detach()),
+            "content_heatmap": float(content_heatmap.detach()),
+            "corner_geometry": float(corner_geometry.detach()),
+        }
+    if profile == "content_mask":
+        # G2 只让 content corner 与 content mask 共同更新共享特征；mask 不通过
+        # quad consistency 反向约束角点，避免把 G2 又变成另一种隐式多任务组合。
+        total = 2.0 * content_heatmap + 1.0 * mask + 1.2 * corner_geometry
+        return total, {
+            "total": float(total.detach()),
+            "content_heatmap": float(content_heatmap.detach()),
+            "mask": float(mask.detach()),
+            "corner_geometry": float(corner_geometry.detach()),
+        }
+    if profile == "content_boundary":
+        # G3 单独检验 boundary 对 content geometry 的影响。继续使用稀疏正样本
+        # 适配的 balanced boundary loss，但不混入 mask/outer/presence/class。
+        total = 2.0 * content_heatmap + 0.8 * boundary + 1.2 * corner_geometry
+        return total, {
+            "total": float(total.detach()),
+            "content_heatmap": float(content_heatmap.detach()),
+            "boundary": float(boundary.detach()),
+            "corner_geometry": float(corner_geometry.detach()),
+        }
     predicted_outer_corners = local_softargmax_corners(outputs["outer_corner_heatmaps"])
     outer_corner_per_sample = F.smooth_l1_loss(
         predicted_outer_corners,
@@ -63,8 +119,8 @@ def quadlocator_loss(
         reduction="none",
     ).mean(dim=(1, 2))
     outer_corner_geometry = (
-        (outer_corner_per_sample * outer_weights).sum() / outer_weights.sum().clamp_min(1.0)
-    )
+        outer_corner_per_sample * outer_weights
+    ).sum() / outer_weights.sum().clamp_min(1.0)
     positive_corner_errors = corner_per_sample[present_weights >= 0.5]
     cvar = _tail_mean(positive_corner_errors, fraction=0.25)
     ambiguity = _peak_ambiguity_penalty(outputs["content_corner_heatmaps"], present_weights)

@@ -271,7 +271,7 @@ geometry_train() {
   fi
   python -m training.quadlocator.train "${arguments[@]}"
   python -m training.quadlocator.export_onnx \
-    --checkpoint "$output/best.pt" \
+    --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
 }
 

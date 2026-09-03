@@ -54,7 +54,7 @@ require_path() {
 }
 
 ensure_fresh_stage() {
-  if [[ -e "$1/best.pt" && "${P2_ALLOW_OVERWRITE:-0}" != "1" ]]; then
+  if [[ -e "$1/best_geometry.pt" && "${P2_ALLOW_OVERWRITE:-0}" != "1" ]]; then
     echo "stage 已存在，拒绝覆盖历史 checkpoint：$1（如确认重跑，显式设置 P2_ALLOW_OVERWRITE=1）" >&2
     exit 1
   fi
@@ -177,14 +177,14 @@ run_stage_a() {
     --device "$DEVICE" \
     --seed "$SEED"
   python -m training.quadlocator.export_onnx \
-    --checkpoint "$output/best.pt" \
+    --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
   evaluate_smartdoc "$output"
   render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl"
 }
 
 run_stage_b() {
-  require_path "$RUN_DIRECTORY/stage-a/best.pt"
+  require_path "$RUN_DIRECTORY/stage-a/best_geometry.pt"
   require_path "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
   local output="$RUN_DIRECTORY/stage-b"
   ensure_fresh_stage "$output"
@@ -192,7 +192,7 @@ run_stage_b() {
     --manifest "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output-directory "$output" \
-    --init-checkpoint "$RUN_DIRECTORY/stage-a/best.pt" \
+    --init-checkpoint "$RUN_DIRECTORY/stage-a/best_geometry.pt" \
     --epochs 18 \
     --early-stopping-patience 5 \
     --learning-rate 2e-4 \
@@ -203,14 +203,14 @@ run_stage_b() {
     --device "$DEVICE" \
     --seed "$SEED"
   python -m training.quadlocator.export_onnx \
-    --checkpoint "$output/best.pt" \
+    --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
   evaluate_smartdoc "$output"
   render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
 }
 
 run_stage_c() {
-  require_path "$RUN_DIRECTORY/stage-b/best.pt"
+  require_path "$RUN_DIRECTORY/stage-b/best_geometry.pt"
   require_path "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl"
   local output="$RUN_DIRECTORY/stage-c"
   ensure_fresh_stage "$output"
@@ -218,7 +218,7 @@ run_stage_c() {
     --manifest "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output-directory "$output" \
-    --init-checkpoint "$RUN_DIRECTORY/stage-b/best.pt" \
+    --init-checkpoint "$RUN_DIRECTORY/stage-b/best_geometry.pt" \
     --epochs 8 \
     --early-stopping-patience 3 \
     --learning-rate 7.5e-5 \
@@ -229,18 +229,18 @@ run_stage_c() {
     --device "$DEVICE" \
     --seed "$SEED"
   python -m training.quadlocator.export_onnx \
-    --checkpoint "$output/best.pt" \
+    --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
   evaluate_smartdoc "$output"
   render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
 }
 
 run_stage_d() {
-  require_path "$RUN_DIRECTORY/stage-c/best.pt"
+  require_path "$RUN_DIRECTORY/stage-c/best_geometry.pt"
   require_path "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl"
   mkdir -p "$RUN_DIRECTORY/stage-d"
   python -m training.quadlocator.calibrate \
-    --checkpoint "$RUN_DIRECTORY/stage-c/best.pt" \
+    --checkpoint "$RUN_DIRECTORY/stage-c/best_geometry.pt" \
     --manifest "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output "$RUN_DIRECTORY/stage-d/calibration.json" \

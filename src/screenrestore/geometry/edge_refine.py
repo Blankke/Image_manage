@@ -152,6 +152,7 @@ def refine_quad_edges(
         accepted=accepted,
         edge_support=tuple(float(value) for value in support),  # type: ignore[arg-type]
         corner_shifts=tuple(float(value) for value in shifts),  # type: ignore[arg-type]
+        attempted_corners=refined,
         reason=reason,
         residual_median=tuple(item["residual_median"] for item in edge_diagnostics),  # type: ignore[arg-type]
         residual_p95=tuple(item["residual_p95"] for item in edge_diagnostics),  # type: ignore[arg-type]
@@ -179,7 +180,9 @@ def _fit_edge(
         return None
     tangent = vector / length
     normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
-    sample_count = int(np.clip(round(length / 6.0), params.min_valid_samples, params.samples_per_edge))
+    sample_count = int(
+        np.clip(round(length / 6.0), params.min_valid_samples, params.samples_per_edge)
+    )
     offsets = np.arange(-band, band + 1, dtype=np.float64)
     points: list[np.ndarray] = []
     strengths: list[float] = []
@@ -231,7 +234,9 @@ def _fit_edge(
         "residual_p95": float(np.percentile(residuals[keep], 95)),
         "continuous_coverage": float(longest_run / max(1, sample_count)),
         "normal_alignment": float(np.median(alignment_array[keep])),
-        "boundary_consistency": float(np.median(boundary_array[keep])) if boundary is not None else 0.0,
+        "boundary_consistency": float(np.median(boundary_array[keep]))
+        if boundary is not None
+        else 0.0,
     }
     return line, support, diagnostics
 

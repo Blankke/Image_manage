@@ -33,7 +33,7 @@ OUTPUT_NAMES = [
 # v2 与 v3 的网络结构及 7-output ONNX 契约相同；v3 仅增加了 P3 decoder、
 # loss profile 与 hard-sampling 元数据。导出器应按模型契约判断，不能把元数据
 # 版本升级误判为不兼容 checkpoint。
-SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3})
+SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3, 4})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--opset", type=int, default=18)
     args = parser.parse_args(argv)
     print("[####--------------------] 1/3 加载 checkpoint", file=sys.stderr)
-    checkpoint = torch.load(args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False)
+    checkpoint = torch.load(
+        args.checkpoint.expanduser().resolve(), map_location="cpu", weights_only=False
+    )
     checkpoint_format = checkpoint.get("format_version")
     if checkpoint_format not in SUPPORTED_CHECKPOINT_FORMATS:
         supported = ", ".join(str(value) for value in sorted(SUPPORTED_CHECKPOINT_FORMATS))

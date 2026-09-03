@@ -39,11 +39,14 @@ class ValidationMetrics:
     layer_ambiguous_count: int = 0
     accepted_count: int = 0
     accepted_correct_count: int = 0
+    content_strict_correct_count: int = 0
     ambiguous_target_count: int = 0
     ambiguous_rejected_count: int = 0
 
     def update(self, outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]) -> None:
-        content_corners = _softargmax_corners(outputs["content_corner_heatmaps"]).detach().cpu().numpy()
+        content_corners = (
+            _softargmax_corners(outputs["content_corner_heatmaps"]).detach().cpu().numpy()
+        )
         outer_corners = _softargmax_corners(outputs["outer_corner_heatmaps"]).detach().cpu().numpy()
         content_target = targets["content_corners"].detach().cpu().numpy()
         outer_target = targets["outer_corners"].detach().cpu().numpy()
@@ -98,12 +101,8 @@ class ValidationMetrics:
             .reshape(-1)
         )
         target_flat = boundary_target.detach().cpu().numpy().reshape(-1)
-        self.boundary_positive_histogram += np.bincount(
-            probability_u8[target_flat], minlength=101
-        )
-        self.boundary_negative_histogram += np.bincount(
-            probability_u8[~target_flat], minlength=101
-        )
+        self.boundary_positive_histogram += np.bincount(probability_u8[target_flat], minlength=101)
+        self.boundary_negative_histogram += np.bincount(probability_u8[~target_flat], minlength=101)
 
         for index in range(len(present)):
             self.outer_probabilities.append(float(outer_probability[index]))
@@ -115,6 +114,7 @@ class ValidationMetrics:
                 self.content_nce.append(nce)
                 self.content_iou.append(iou)
                 self.corner_confidence.append(float(np.mean(content_confidences[index])))
+                self.content_strict_correct_count += int(nce <= 0.01 and iou >= 0.93)
             if outer_present[index]:
                 self.outer_nce.append(_corner_nce(outer_corners[index], outer_target[index]))
                 self.outer_iou.append(_quad_iou(outer_corners[index], outer_target[index]))
@@ -158,7 +158,9 @@ class ValidationMetrics:
         class_recall: dict[str, float] = {}
         for index, name in enumerate(("artwork", "postcard", "screen", "none")):
             denominator = int(self.confusion[index].sum())
-            class_recall[name] = float(self.confusion[index, index] / denominator) if denominator else 0.0
+            class_recall[name] = (
+                float(self.confusion[index, index] / denominator) if denominator else 0.0
+            )
         sample_count = max(1, int(self.confusion.sum()))
         accepted_precision = (
             self.accepted_correct_count / self.accepted_count if self.accepted_count else 0.0
@@ -178,6 +180,11 @@ class ValidationMetrics:
             "content_corner_nce_p95": _percentile(self.content_nce, 95, empty=1.0),
             "content_iou_median": _percentile(self.content_iou, 50),
             "content_iou_p05": _percentile(self.content_iou, 5),
+            "content_strict_correct_rate": (
+                self.content_strict_correct_count / self.present_count
+                if self.present_count
+                else 0.0
+            ),
             "corner_heatmap_confidence": float(np.mean(self.corner_confidence))
             if self.corner_confidence
             else 0.0,
@@ -253,7 +260,9 @@ def _quad_iou(predicted: np.ndarray, target: np.ndarray) -> float:
     if len(predicted) != 4 or len(target) != 4:
         return 0.0
     intersection, _ = cv2.intersectConvexConvex(predicted, target)
-    union = abs(float(cv2.contourArea(predicted))) + abs(float(cv2.contourArea(target))) - intersection
+    union = (
+        abs(float(cv2.contourArea(predicted))) + abs(float(cv2.contourArea(target))) - intersection
+    )
     return float(intersection / union) if union > 1e-8 else 0.0
 
 
@@ -261,12 +270,20 @@ def _contains(outer: np.ndarray, content: np.ndarray) -> bool:
     contour = cv2.convexHull(outer.astype(np.float32)).reshape(-1, 1, 2)
     if len(contour) != 4:
         return False
-    return all(cv2.pointPolygonTest(contour, tuple(map(float, point)), False) >= 0 for point in content)
+    return all(
+        cv2.pointPolygonTest(contour, tuple(map(float, point)), False) >= 0 for point in content
+    )
 
 
 def _binary_calibration(probabilities: list[float], targets: list[int]) -> dict[str, float]:
     if not probabilities:
-        return {"precision": 0.0, "recall": 0.0, "false_positive_rate": 0.0, "brier": 0.0, "ece": 0.0}
+        return {
+            "precision": 0.0,
+            "recall": 0.0,
+            "false_positive_rate": 0.0,
+            "brier": 0.0,
+            "ece": 0.0,
+        }
     probability = np.asarray(probabilities, np.float64)
     target = np.asarray(targets, np.int64)
     predicted = probability >= 0.5

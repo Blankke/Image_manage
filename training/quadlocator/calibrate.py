@@ -41,9 +41,9 @@ DEFAULT_THRESHOLDS = {
     "combined": 0.68,
 }
 
-# P3 format v3 只扩展训练与 decoder 元数据，模型仍保持与 P2 v2 相同的
+# P3/P4 只扩展训练与 decoder 元数据，模型仍保持与 P2 v2 相同的
 # QuadLocatorS 7-output 契约，因此冻结 checkpoint 校准可安全共用。
-SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3})
+SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3, 4})
 
 
 @dataclass(slots=True)

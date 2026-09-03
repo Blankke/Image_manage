@@ -121,7 +121,7 @@ python -m training.quadlocator.train \
   --batch-size "$GEOMETRY_BATCH" \
   --device auto
 python -m training.quadlocator.export_onnx \
-  --checkpoint "$RUN_DIRECTORY/geometry/best.pt" \
+  --checkpoint "$RUN_DIRECTORY/geometry/best_geometry.pt" \
   --output "$RUN_DIRECTORY/geometry/quadlocator-s.onnx"
 
 echo "[$MODE] Fidelity：DIV2K HR 在线退化的同尺寸恢复训练"

@@ -15,6 +15,7 @@ from torch.utils.data import Dataset, Sampler
 
 CLASS_INDEX = {"artwork": 0, "postcard": 1, "screen": 2, "none": 3}
 VALID_SPLITS = {"train", "validation", "test"}
+AUGMENTATION_MODES = {"none", "photometric", "geometric", "full"}
 
 
 class QuadDataset(Dataset[dict[str, torch.Tensor]]):
@@ -31,6 +32,7 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         dataset_root: str | Path | None = None,
         max_samples: int = 0,
         augment: bool | None = None,
+        augmentation_mode: str | None = None,
         seed: int = 20260823,
     ) -> None:
         self.manifest_path = Path(manifest_path).expanduser().resolve()
@@ -48,9 +50,14 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
             raise ValueError("boundary_sigma 必须位于 head 分辨率的 1..3 像素")
         self.boundary_sigma = float(boundary_sigma)
         self.split = split
-        self.augment = split == "train" if augment is None else augment
-        if split != "train" and self.augment:
+        default_augment = split == "train" if augment is None else augment
+        if augmentation_mode is None:
+            augmentation_mode = "full" if default_augment else "none"
+        if augmentation_mode not in AUGMENTATION_MODES:
+            raise ValueError(f"未知 augmentation mode：{augmentation_mode}")
+        if split != "train" and augmentation_mode != "none":
             raise ValueError("validation/test 不允许随机 augmentation")
+        self.augmentation_mode = augmentation_mode
         self.seed = seed
         self.epoch = 0
         if image_size < 128 or image_size % 32:
@@ -85,7 +92,6 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         with Image.open(path) as source:
             source_rgb = np.asarray(source.convert("RGB"))
         image, transform = _letterbox_image(source_rgb, self.image_size)
-        image_tensor = torch.from_numpy(image.copy()).permute(2, 0, 1).float() / 255.0
         present = bool(record["present"])
         target_class = str(record["target_class"])
         ambiguous = bool(record.get("ambiguous", False))
@@ -93,14 +99,18 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
             raise ValueError(f"未知 target_class：{target_class}")
         content_quad = _transform_quad(_quad(record.get("content_quad"), present), transform)
         outer_quad = _transform_quad(_quad(record.get("outer_quad"), False), transform)
-        if self.augment:
+        if self.augmentation_mode != "none":
             rng = np.random.default_rng(self.seed + self.epoch * 1_000_003 + index)
             image, content_quad, outer_quad = _augment_sample(
                 image,
                 content_quad,
                 outer_quad,
                 rng,
+                mode=self.augmentation_mode,
             )
+        # 必须在同步增强之后转 tensor。此前这里过早构造 tensor，导致 geometric
+        # augmentation 仅改变 quad 标签、没有改变模型输入，形成确定性的错位监督。
+        image_tensor = torch.from_numpy(image.copy()).permute(2, 0, 1).float() / 255.0
         content_heatmaps = _corner_heatmaps(content_quad, self.output_size, self.heatmap_sigma)
         outer_heatmaps = _corner_heatmaps(outer_quad, self.output_size, self.heatmap_sigma)
         content_mask = _polygon_mask(content_quad, self.output_size, filled=True)
@@ -388,27 +398,35 @@ def _augment_sample(
     content_quad: np.ndarray | None,
     outer_quad: np.ndarray | None,
     rng: np.random.Generator,
+    *,
+    mode: str = "full",
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
-    """在 letterbox 坐标执行同步几何与摄影增强。
+    """在 letterbox 坐标执行可分离的同步几何与摄影增强。
 
     四角使用同一单应矩阵更新。完整可见的正样本只接受四角仍在画幅内的变换；
     near-border 由平移与尺度联合产生，validation/test 不会进入本函数。
     """
 
+    if mode not in AUGMENTATION_MODES:
+        raise ValueError(f"未知 augmentation mode：{mode}")
     size = image_rgb.shape[0]
-    matrix = _sample_homography(size, content_quad, outer_quad, rng)
-    border = tuple(int(value) for value in np.median(image_rgb.reshape(-1, 3), axis=0))
-    augmented = cv2.warpPerspective(
-        image_rgb,
-        matrix,
-        (size, size),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=border,
-    )
-    content = _warp_normalized_quad(content_quad, matrix, size)
-    outer = _warp_normalized_quad(outer_quad, matrix, size)
-    augmented = _photometric_augmentation(augmented, rng)
+    augmented = image_rgb
+    content, outer = content_quad, outer_quad
+    if mode in {"geometric", "full"}:
+        matrix = _sample_homography(size, content_quad, outer_quad, rng)
+        border = tuple(int(value) for value in np.median(image_rgb.reshape(-1, 3), axis=0))
+        augmented = cv2.warpPerspective(
+            image_rgb,
+            matrix,
+            (size, size),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=border,
+        )
+        content = _warp_normalized_quad(content_quad, matrix, size)
+        outer = _warp_normalized_quad(outer_quad, matrix, size)
+    if mode in {"photometric", "full"}:
+        augmented = _photometric_augmentation(augmented, rng)
     return augmented, content, outer
 
 
