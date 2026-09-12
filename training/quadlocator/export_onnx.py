@@ -30,10 +30,10 @@ OUTPUT_NAMES = [
     "class_logits",
 ]
 
-# v2 与 v3 的网络结构及 7-output ONNX 契约相同；v3 仅增加了 P3 decoder、
-# loss profile 与 hard-sampling 元数据。导出器应按模型契约判断，不能把元数据
-# 版本升级误判为不兼容 checkpoint。
-SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3, 4})
+# v2 至 v5 的网络结构及 7-output ONNX 契约相同；后续版本仅增加训练、
+# decoder 与里程碑追踪元数据。导出器应按模型契约判断，不能把元数据版本升级
+# 误判为不兼容 checkpoint。
+SUPPORTED_CHECKPOINT_FORMATS = frozenset({2, 3, 4, 5})
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -251,7 +251,10 @@ def _binary_curve_from_histograms(
 
 
 def _corner_nce(predicted: np.ndarray, target: np.ndarray) -> float:
-    return float(np.mean(np.linalg.norm(predicted - target, axis=1)) / np.sqrt(2.0))
+    # 与产品 benchmark 统一使用目标四角包围盒对角线。整图对角线会让小目标的
+    # 误差看起来异常乐观，并使训练期 best/watchdog 与冻结评估产生不同结论。
+    target_diagonal = float(np.linalg.norm(target.max(axis=0) - target.min(axis=0)))
+    return float(np.mean(np.linalg.norm(predicted - target, axis=1)) / max(target_diagonal, 1e-8))
 
 
 def _quad_iou(predicted: np.ndarray, target: np.ndarray) -> float:

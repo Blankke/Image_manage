@@ -12,6 +12,12 @@ import pytest
 torch = pytest.importorskip("torch")
 
 
+def _state_dict_equal(first: dict[str, torch.Tensor], second: dict[str, torch.Tensor]) -> bool:
+    return first.keys() == second.keys() and all(
+        torch.equal(first[name], second[name]) for name in first
+    )
+
+
 def test_model_heads_and_loss_are_trainable(tmp_path) -> None:  # type: ignore[no-untyped-def]
     from training.quadlocator.dataset import QuadDataset
     from training.quadlocator.generate_synthetic import main as generate_synthetic
@@ -362,12 +368,14 @@ def test_geometry_selection_rejects_iou_tail_collapse_for_tiny_nce_gain() -> Non
     from training.quadlocator.train import _geometry_selection_key
 
     stable = {
+        "content_corner_nce_median": 0.031,
         "content_corner_nce_p95": 0.154,
         "content_iou_p05": 0.088,
         "content_iou_median": 0.677,
         "content_strict_correct_rate": 0.011,
     }
     collapsed = {
+        "content_corner_nce_median": 0.030,
         "content_corner_nce_p95": 0.151,
         "content_iou_p05": 0.0,
         "content_iou_median": 0.652,
@@ -404,25 +412,149 @@ def test_geometry_tail_watchdog_requires_both_tail_regressions() -> None:
 def test_best_geometry_eligibility_keeps_tail_safe_warm_start() -> None:
     from training.quadlocator.train import _is_geometry_eligible
 
-    reference = {"content_corner_nce_p95": 0.154, "content_iou_p05": 0.153}
+    reference = {
+        "content_corner_nce_median": 0.030,
+        "content_corner_nce_p95": 0.154,
+        "content_iou_median": 0.700,
+        "content_iou_p05": 0.153,
+    }
     assert _is_geometry_eligible(
-        {"content_corner_nce_p95": 0.160, "content_iou_p05": 0.170},
+        {
+            "content_corner_nce_median": 0.031,
+            "content_corner_nce_p95": 0.160,
+            "content_iou_median": 0.695,
+            "content_iou_p05": 0.170,
+        },
         reference,
         nce_p95_ratio=1.10,
         iou_p05_ratio=0.90,
+        nce_median_tolerance=0.002,
+        iou_median_tolerance=0.01,
     )
     assert not _is_geometry_eligible(
-        {"content_corner_nce_p95": 0.201, "content_iou_p05": 0.170},
+        {
+            "content_corner_nce_median": 0.031,
+            "content_corner_nce_p95": 0.201,
+            "content_iou_median": 0.695,
+            "content_iou_p05": 0.170,
+        },
         reference,
         nce_p95_ratio=1.10,
         iou_p05_ratio=0.90,
+        nce_median_tolerance=0.002,
+        iou_median_tolerance=0.01,
     )
     assert not _is_geometry_eligible(
-        {"content_corner_nce_p95": 0.160, "content_iou_p05": 0.099},
+        {
+            "content_corner_nce_median": 0.031,
+            "content_corner_nce_p95": 0.160,
+            "content_iou_median": 0.695,
+            "content_iou_p05": 0.099,
+        },
         reference,
         nce_p95_ratio=1.10,
         iou_p05_ratio=0.90,
+        nce_median_tolerance=0.002,
+        iou_median_tolerance=0.01,
     )
+    assert not _is_geometry_eligible(
+        {
+            "content_corner_nce_median": 0.04,
+            "content_corner_nce_p95": 0.160,
+            "content_iou_median": 0.695,
+            "content_iou_p05": 0.170,
+        },
+        reference,
+        nce_p95_ratio=1.10,
+        iou_p05_ratio=0.90,
+        nce_median_tolerance=0.002,
+        iou_median_tolerance=0.01,
+    )
+    assert not _is_geometry_eligible(
+        {
+            "content_corner_nce_median": 0.031,
+            "content_corner_nce_p95": 0.160,
+            "content_iou_median": 0.68,
+            "content_iou_p05": 0.170,
+        },
+        reference,
+        nce_p95_ratio=1.10,
+        iou_p05_ratio=0.90,
+        nce_median_tolerance=0.002,
+        iou_median_tolerance=0.01,
+    )
+
+
+def test_validation_nce_uses_target_bbox_diagonal_and_is_scale_invariant() -> None:
+    from training.quadlocator.metrics import _corner_nce
+
+    target = np.array([[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]], np.float32)
+    predicted = target + np.array([0.06, 0.0], np.float32)
+    expected = 0.06 / np.sqrt(0.6**2 + 0.6**2)
+
+    assert _corner_nce(predicted, target) == pytest.approx(expected)
+    assert _corner_nce(predicted * 256.0, target * 256.0) == pytest.approx(expected)
+
+
+def test_milestone_checkpoint_keeps_epoch_state_and_refuses_overwrite(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from training.quadlocator.model import QuadLocatorS
+    from training.quadlocator.train import _save_milestone_checkpoint
+
+    directory = tmp_path / "checkpoints"
+    directory.mkdir()
+    model = QuadLocatorS(width_multiplier=0.5)
+    checkpoint = {
+        "epoch": 4,
+        "state_dict": model.state_dict(),
+        "validation_metrics": {"content_corner_nce_p95": 0.2},
+    }
+    torch.save(checkpoint, tmp_path / "last.pt")
+
+    identity = _save_milestone_checkpoint(checkpoint, directory, 4)
+    loaded = torch.load(directory / "epoch-004.pt", map_location="cpu", weights_only=False)
+    last = torch.load(tmp_path / "last.pt", map_location="cpu", weights_only=False)
+
+    assert identity["epoch"] == 4
+    assert identity["path"] == str(directory / "epoch-004.pt")
+    assert len(str(identity["sha256"])) == 64
+    assert loaded["epoch"] == checkpoint["epoch"]
+    assert loaded["validation_metrics"] == checkpoint["validation_metrics"]
+    assert _state_dict_equal(loaded["state_dict"], checkpoint["state_dict"])
+    assert loaded["epoch"] == last["epoch"]
+    assert loaded["validation_metrics"] == last["validation_metrics"]
+    assert _state_dict_equal(loaded["state_dict"], last["state_dict"])
+    with pytest.raises(FileExistsError, match="拒绝覆盖"):
+        _save_milestone_checkpoint(checkpoint, directory, 4)
+
+
+def test_checkpoint_epoch_parser_and_scheduler_horizon_are_explicit() -> None:
+    from training.quadlocator.train import _checkpoint_epochs, _resolve_scheduler_t_max
+
+    assert _checkpoint_epochs("8,1,4,4") == (1, 4, 8)
+    assert _resolve_scheduler_t_max(8, 16) == 16
+    assert _resolve_scheduler_t_max(8, 0) == 8
+    with pytest.raises(ValueError, match="不小于"):
+        _resolve_scheduler_t_max(16, 8)
+
+
+def test_explicit_scheduler_horizon_preserves_first_eight_epoch_trajectory() -> None:
+    def learning_rates(actual_epochs: int, horizon: int) -> list[float]:
+        parameter = torch.nn.Parameter(torch.zeros(()))
+        optimizer = torch.optim.AdamW([parameter], lr=1e-5)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=horizon)
+        result = []
+        for _ in range(actual_epochs):
+            optimizer.step()
+            scheduler.step()
+            result.append(float(scheduler.get_last_lr()[0]))
+        return result
+
+    full = learning_rates(16, 16)
+    prefix_only = learning_rates(8, 16)
+    changed_horizon = learning_rates(8, 8)
+
+    assert prefix_only == full[:8]
+    assert changed_horizon != full[:8]
 
 
 def test_validation_selection_prefers_rejecting_ambiguous_target() -> None:
@@ -478,7 +610,7 @@ def test_init_checkpoint_loads_p1_compatible_parameters_and_keeps_new_head(tmp_p
     assert torch.equal(new_model.stem[0].weight, old_model.stem[0].weight)
 
 
-@pytest.mark.parametrize("format_version", [2, 3])
+@pytest.mark.parametrize("format_version", [2, 3, 4, 5])
 def test_exported_onnx_uses_seven_output_contract(
     tmp_path,  # type: ignore[no-untyped-def]
     format_version: int,
@@ -680,9 +812,7 @@ def test_augmentation_modes_separate_geometry_and_photometry(monkeypatch) -> Non
     assert not np.array_equal(geometric, image)
 
 
-def test_dataset_geometric_augmentation_updates_model_input_and_quad(
-    tmp_path, monkeypatch
-) -> None:  # type: ignore[no-untyped-def]
+def test_dataset_geometric_augmentation_updates_model_input_and_quad(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """回归：几何增强后的模型输入与监督四角必须使用同一变换。"""
 
     import training.quadlocator.dataset as dataset_module
@@ -723,7 +853,9 @@ def test_dataset_geometric_augmentation_updates_model_input_and_quad(
     observed = augmented["image"][0].numpy() > 0.7
     yy, xx = np.where(observed)
     observed_center = np.array([xx.mean() / 127.0, yy.mean() / 127.0], np.float32)
-    assert np.allclose(observed_center, augmented["content_corners"].numpy().mean(axis=0), atol=0.03)
+    assert np.allclose(
+        observed_center, augmented["content_corners"].numpy().mean(axis=0), atol=0.03
+    )
 
 
 def test_source_group_balanced_sampler_only_uses_dataset_split(tmp_path) -> None:  # type: ignore[no-untyped-def]

@@ -60,3 +60,30 @@ P3 真实数据用于验证自动几何、忠实恢复、摩尔纹、反射和�
 - 私有照片只保存在 `$SCREENRESTORE_DATA_ROOT/private`，不得提交、上传或写入日志。
 - 外部数据必须保存明确许可与来源；许可不清晰时只记录 BLOCKED，不下载、不训练。
 - 当前数据根硬上限 30 GiB。下载前先记录压缩包、解压、保留和最终预计大小；禁止缓存在线 augmentation。
+
+## P4 target-domain development protocol
+
+SmartDoc validation 当前只有 3 个独立 group，只能作为烟测切片。P4 新采集集固定为
+development validation，用于 checkpoint eligibility、acceptance calibrator 拟合与阈值选择；它不进入
+SmartDoc test，也不替代后续 release test。
+
+- 首批目标为 48 个独立 subject：postcard、artwork、screen/display、poster 各 12 个；poster 按
+  `target_class=artwork` 标注，并用 `scene_type=poster` 保留场景切片。
+- 每个 subject 使用唯一 `digital_source_id`；同一数字内容的不同打印件、屏幕、裁切或颜色版本仍视为
+  同一 source family。`group_id` 按 source family 固定，禁止按单张照片随机生成。
+- 每个 subject 至少采集 2 个不同 `capture_session`，每个 session 6–10 张。session 以设备、地点和
+  连续拍摄时间窗共同定义；同一 burst 不得拆分。
+- 正样本覆盖正视、轻/中度透视、near-border、nested layer、弱边与轻反光；另按 class 配置完整目标
+  数量约 25% 的 in-scope hard negative，包括 partial、multi-target、曲面、强遮挡和极端视角。
+- 全部记录固定为 `split=validation`。calibrator 内部再按 `group_id` 哈希形成 fit/selection/evaluation
+  三个互斥分区；不得把照片级随机切分当成独立验证。
+- 采集前登记 `digital_source_id`、`subject_id`、`capture_session`、设备、地点代号、授权范围和预计
+  字节数；入库前审计这三类 ID 与既有 calibration、SmartDoc validation/test 均无交集。
+- 原图存于 `$SCREENRESTORE_DATA_ROOT/private/p4-target-domain/raw`，标注清单存于同一 private 根；
+  overlay 与审计产物写入外部 run 目录。仓库只保留协议和 schema，不保存照片、文件名清单或标注。
+- 每次入库前执行 `du -sk "$SCREENRESTORE_DATA_ROOT"`。当前根目录接近 23 GiB，剩余预算按 30 GiB
+  硬上限控制；本轮不自动下载任何数据。
+
+启用该切片的验收条件是四类均达到至少 8 个独立 group、三类隔离 ID 完整、标注 overlay 完成人工
+复核且无 split 泄漏。在达到条件前，报告应明确写为 `insufficient_target_domain_groups`，不能用图片数
+替代独立 group 数。

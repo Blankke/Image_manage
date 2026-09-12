@@ -172,3 +172,61 @@ SmartDoc 集只有 2 个独立 group，不能作为 release 级精度证据。
 - 下一步：先做保留 epoch checkpoint 的短程轨迹评估（例如 epoch 1/2/4/8），在同一 SmartDoc raw/coarse
   审计中找出 median 与 tail 可同时改善的 checkpoint；确定几何 checkpoint 后，再单独处理
   presence/class/boundary/acceptance 的产品链路。
+
+## P4-G3.6：Geometry Freeze + Acceptance Decoupling
+
+G3.6 使用相同 seed/sampler/full augmentation、20000 train、1000 internal validation、batch 16、
+LR `1e-5` 和 16-epoch cosine horizon 完整重放 coordinate-only 轨迹，只训练 content corner head，
+并保存 epoch 1/2/4/8/12/14/16。里程碑及 SHA256 已记录于 run.json。
+
+checkpoint selection 预先固定 absolute tolerance：NCE median 0.002、NCE P95 0.005、IoU median
+0.01、IoU P05 0.01。选择只读取 internal validation、P2 calibration 与 SmartDoc validation；
+SmartDoc test 不参与选择。按目标包围盒对角线归一化的 decoder-v2 结果为：
+
+| split/checkpoint | NCE med | NCE P95 | IoU med | IoU P05 |
+|---|---:|---:|---:|---:|
+| internal B0 | 0.08926 | 0.28628 | 0.75817 | 0.32774 |
+| internal e1/e2/e4 | 0.20143/0.18007/0.16116 | 0.37911/0.33882/0.28492 | 0.52772/0.55687/0.59265 | 0.29479/0.31982/0.36825 |
+| internal e8/e12/e14/e16 | 0.13633/0.12464/0.12217/0.12183 | 0.25687/0.25016/0.24518/0.24923 | 0.64413/0.66905/0.67471/0.67332 | 0.40796/0.41374/0.42254/0.41522 |
+| calibration B0 | 0.09105 | 0.29214 | 0.74829 | 0.30091 |
+| calibration e1/e2/e4 | 0.19709/0.17584/0.16024 | 0.38629/0.34395/0.28549 | 0.53027/0.56895/0.60200 | 0.29976/0.32803/0.37418 |
+| calibration e8/e12/e14/e16 | 0.13469/0.12260/0.12178/0.12168 | 0.25918/0.25098/0.25025/0.25034 | 0.64635/0.67084/0.67410/0.67434 | 0.41114/0.41632/0.42222/0.41759 |
+| SmartDoc val B0 | 0.12597 | 0.33262 | 0.66861 | 0.18028 |
+| SmartDoc val e1/e2/e4 | 0.25564/0.22364/0.20020 | 0.41315/0.37282/0.30094 | 0.46452/0.50633/0.55964 | 0.29221/0.32019/0.38263 |
+| SmartDoc val e8/e12/e14/e16 | 0.15869/0.14069/0.13880/0.13865 | 0.27287/0.26510/0.26574/0.26533 | 0.61759/0.64754/0.65054/0.65079 | 0.42169/0.42978/0.42896/0.42939 |
+
+所有 milestone 都未通过 B0 eligibility；Pareto front 为 epoch 12/14/16，eligible Pareto front 为空。
+因此不强行宣布 coordinate winner，冻结 incumbent B0。coordinate-only 的结论是“tail recovery 有效，
+median preservation 失败”。acceptance 的独立结论见 `docs/P4_ACCEPTANCE_AUDIT.md`；G4 与 geometry
+FULL 继续 BLOCKED。
+
+### G3.6 输入尺寸口径修正
+
+后续审计发现，P2 B0 checkpoint 声明的 `image_size=512`，P4 trajectory checkpoints 声明的
+`image_size=256`；第一版 trajectory evaluator 按每个 checkpoint 自身尺寸推理。因此上一节
+G3.6 表格实际比较了 512 输入的 B0 与 256 输入的 challenger，不能继续作为 checkpoint
+eligibility 或训练归因证据。保留 B0 是安全的保守决策，但“所有 challenger 均不合格”的原因需要
+在共同输入尺寸下重新验证。
+
+evaluator 已升级为 format v2：所有 checkpoint 强制使用同一个 `evaluation_image_size`，默认采用
+B0 尺寸，也可通过 `--evaluation-image-size` 显式指定；报告同时记录共同评估尺寸和 checkpoint 原
+声明尺寸。该修正不影响冻结 B0 上已经完成的 acceptance feature audit。
+
+首个共同 512 对照为 `content_only`、content-head-only、无 augmentation、5000 train samples、
+LR `1e-5`、epoch 1。它在 internal/calibration/SmartDoc validation 的 NCE median 与 P95 均优于
+B0，但三个 slice 的 IoU median 分别下降 `0.01784`、`0.01293`、`0.02748`，超出预注册的
+`0.01` 容差；internal IoU P05 也下降 `0.01063`。因此该 checkpoint 仍为
+`NO_ELIGIBLE_CHECKPOINT`，下一步只允许用更低学习率做同配置短程对照。
+
+将学习率降至 `2e-6` 后，epoch 1 在共同 512 下继续让三个 slice 的 NCE median/P95 全部改善，
+calibration 四项也全部通过安全线；但 internal IoU P05 从 `0.32774` 降至 `0.31336`（退化
+`0.01437`），SmartDoc validation IoU median 从 `0.66861` 降至 `0.65357`（退化 `0.01504`），
+仍分别超过 `0.01` 容差。因此状态仍为 `NO_ELIGIBLE_CHECKPOINT`。相较 `1e-5`，IoU 回退已明显
+收窄，允许继续做 `1e-6` 的单轮、单变量验证；不延长现有 checkpoint。
+
+`1e-6` 的共同 512 结果没有延续线性收敛：internal IoU P05 仍退化 `0.01432`，SmartDoc
+validation IoU median 退化 `0.01595`，状态继续为 `NO_ELIGIBLE_CHECKPOINT`。这两个越线量与
+`2e-6` 基本相同，因此停止继续二分学习率。额外复核显示，训练侧以 512 输入评估 B0 时，NCE
+median `0.09001`、IoU median `0.75812`，已经接近冻结 evaluator 的 `0.08926`、`0.75817`；而
+256 输入训练侧分别为 `0.25483`、`0.45141`。下一轮改为在 B0 原生 512 分辨率做单轮训练，验证
+训练/部署分辨率一致性是否能消除 IoU median 交换。

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -40,6 +41,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument(
+        "--scheduler-t-max",
+        type=int,
+        default=0,
+        help=(
+            "CosineAnnealingLR 的固定 horizon；0 表示等于 epochs。"
+            "短程轨迹重放可设为原实验总轮数，避免改变前段学习率"
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-epochs",
+        type=_checkpoint_epochs,
+        default=(),
+        help="仅显式保存这些 epoch，例如 1,2,4,8,12,14,16",
+    )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--width-multiplier", type=float, default=1.0)
@@ -155,11 +171,26 @@ def main(argv: list[str] | None = None) -> int:
         default=0.0,
         help="best_geometry 相对 epoch 0 的 IoU P05 下限倍率；0 表示关闭 eligibility gate",
     )
+    parser.add_argument(
+        "--best-geometry-nce-median-tolerance",
+        type=float,
+        default=0.002,
+        help="best_geometry 相对 epoch 0 允许的 NCE median 绝对退化量",
+    )
+    parser.add_argument(
+        "--best-geometry-iou-median-tolerance",
+        type=float,
+        default=0.01,
+        help="best_geometry 相对 epoch 0 允许的 IoU median 绝对退化量",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--seed", type=int, default=20260823)
     args = parser.parse_args(argv)
     if args.epochs < 1 or args.batch_size < 1:
         raise ValueError("epochs 和 batch-size 必须大于 0")
+    scheduler_t_max = _resolve_scheduler_t_max(args.epochs, args.scheduler_t_max)
+    if any(epoch > args.epochs for epoch in args.checkpoint_epochs):
+        raise ValueError("checkpoint-epochs 不能超过实际 epochs")
     if args.train_samples < 0 or args.validation_samples < 0:
         raise ValueError("样本上限不能为负数")
     if args.early_stopping_patience < 0:
@@ -184,6 +215,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("best-geometry-nce-p95-ratio 必须不小于 1")
         if not 0.0 < args.best_geometry_iou_p05_ratio <= 1.0:
             raise ValueError("best-geometry-iou-p05-ratio 必须位于 (0,1]")
+        if args.best_geometry_nce_median_tolerance < 0.0:
+            raise ValueError("best-geometry-nce-median-tolerance 不能为负数")
+        if args.best_geometry_iou_median_tolerance < 0.0:
+            raise ValueError("best-geometry-iou-median-tolerance 不能为负数")
     _seed_everything(args.seed)
     device = _device(args.device)
     train_data = QuadDataset(
@@ -235,13 +270,17 @@ def main(argv: list[str] | None = None) -> int:
     if not trainable_parameters:
         raise RuntimeError("trainable-scope 没有留下可训参数")
     optimizer = torch.optim.AdamW(trainable_parameters, lr=args.learning_rate, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=scheduler_t_max)
     output_directory = args.output_directory.expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
+    checkpoint_directory = output_directory / "checkpoints"
+    if args.checkpoint_epochs:
+        _validate_milestone_targets(checkpoint_directory, args.checkpoint_epochs)
+        checkpoint_directory.mkdir(parents=True, exist_ok=True)
     started_at = time.monotonic()
     # 每次训练将可比较的实验元数据独立落盘；不记录图片内容，也不把运行产物放入仓库。
     run_metadata = {
-        "format_version": 4,
+        "format_version": 5,
         "dataset_manifest": str(args.manifest.expanduser().resolve()),
         "dataset_root": str(train_data.root),
         "train_samples": len(train_data),
@@ -259,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         "image_size": args.image_size,
         "batch_size": args.batch_size,
         "epochs": args.epochs,
+        "scheduler_t_max": scheduler_t_max,
         "learning_rate": args.learning_rate,
         "device": str(device),
         "init_checkpoint": str(args.init_checkpoint.expanduser().resolve())
@@ -275,6 +315,12 @@ def main(argv: list[str] | None = None) -> int:
         "best_geometry_eligibility": {
             "nce_p95_ratio": args.best_geometry_nce_p95_ratio,
             "iou_p05_ratio": args.best_geometry_iou_p05_ratio,
+            "nce_median_tolerance": args.best_geometry_nce_median_tolerance,
+            "iou_median_tolerance": args.best_geometry_iou_median_tolerance,
+        },
+        "validation_metric_protocol": {
+            "corner_decoder": CornerDecoderSpec().version,
+            "nce_normalization": "target_bbox_diagonal",
         },
         "decoder": CornerDecoderSpec().to_dict(),
         "seed": args.seed,
@@ -282,6 +328,11 @@ def main(argv: list[str] | None = None) -> int:
         "participating_losses": _participating_losses(args.loss_profile),
         "hard_sampling": args.hard_sampling,
         "evaluate_init": args.evaluate_init,
+        "milestone_checkpoints": {
+            "requested_epochs": list(args.checkpoint_epochs),
+            "saved_epochs": [],
+            "saved": [],
+        },
     }
     _warn_missing_training_domains(run_metadata["train_distribution"])
     (output_directory / "run.json").write_text(
@@ -318,7 +369,9 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         watchdog_reference = {
+            "content_corner_nce_median": float(initial_metrics["content_corner_nce_median"]),
             "content_corner_nce_p95": float(initial_metrics["content_corner_nce_p95"]),
+            "content_iou_median": float(initial_metrics["content_iou_median"]),
             "content_iou_p05": float(initial_metrics["content_iou_p05"]),
         }
         if any(eligibility_values):
@@ -326,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             # warm-start，而不是把最后一个退化 checkpoint 误标为 best。
             best_geometry_key = _geometry_selection_key(initial_metrics)
             initial_checkpoint = {
-                "format_version": 4,
+                "format_version": 5,
                 "model": "QuadLocatorS",
                 "width_multiplier": args.width_multiplier,
                 "image_size": args.image_size,
@@ -380,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         history.append(record)
         print(json.dumps(record, ensure_ascii=False), file=sys.stderr)
         checkpoint = {
-            "format_version": 4,
+            "format_version": 5,
             "model": "QuadLocatorS",
             "width_multiplier": args.width_multiplier,
             "image_size": args.image_size,
@@ -397,6 +450,13 @@ def main(argv: list[str] | None = None) -> int:
             "hard_sampling": args.hard_sampling,
         }
         torch.save(checkpoint, output_directory / "last.pt")
+        if epoch in args.checkpoint_epochs:
+            milestone = _save_milestone_checkpoint(checkpoint, checkpoint_directory, epoch)
+            milestone["validation_metrics"] = validation_metrics
+            run_metadata["milestone_checkpoints"]["saved_epochs"].append(epoch)
+            run_metadata["milestone_checkpoints"]["saved"].append(milestone)
+            # 长训中断时也必须保留已经落盘的里程碑身份，而非只在正常结束时补写。
+            _write_run_metadata(output_directory, run_metadata)
         selection_score = float(validation_metrics["selection_score"])
         geometry_key = _geometry_selection_key(validation_metrics)
         geometry_eligible = not any(eligibility_values) or _is_geometry_eligible(
@@ -404,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
             watchdog_reference,
             nce_p95_ratio=args.best_geometry_nce_p95_ratio,
             iou_p05_ratio=args.best_geometry_iou_p05_ratio,
+            nce_median_tolerance=args.best_geometry_nce_median_tolerance,
+            iou_median_tolerance=args.best_geometry_iou_median_tolerance,
         )
         geometry_improved = geometry_eligible and (
             best_geometry_key is None or geometry_key > best_geometry_key
@@ -417,9 +479,7 @@ def main(argv: list[str] | None = None) -> int:
             best_validation = validation_loss
             torch.save(checkpoint, output_directory / "best_product.pt")
         improved = (
-            geometry_improved
-            if args.early_stopping_criterion == "geometry"
-            else product_improved
+            geometry_improved if args.early_stopping_criterion == "geometry" else product_improved
         )
         if improved:
             epochs_without_improvement = 0
@@ -482,11 +542,76 @@ def main(argv: list[str] | None = None) -> int:
     run_metadata["best_selection_score"] = best_selection_score
     run_metadata["best_geometry_key"] = list(best_geometry_key) if best_geometry_key else None
     run_metadata["completed_epochs"] = len(history)
+    _write_run_metadata(output_directory, run_metadata)
+    return 0
+
+
+def _checkpoint_epochs(value: str) -> tuple[int, ...]:
+    """解析显式里程碑列表；排序和去重让输出路径具有唯一语义。"""
+
+    if not value.strip():
+        return ()
+    try:
+        epochs = tuple(sorted({int(item.strip()) for item in value.split(",")}))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("checkpoint-epochs 必须是逗号分隔的整数") from exc
+    if any(epoch < 1 for epoch in epochs):
+        raise argparse.ArgumentTypeError("checkpoint-epochs 必须全部大于 0")
+    return epochs
+
+
+def _resolve_scheduler_t_max(epochs: int, requested: int) -> int:
+    """解析独立 scheduler horizon，允许只运行原完整轨迹的前若干轮。"""
+
+    resolved = requested or epochs
+    if resolved < epochs:
+        raise ValueError("scheduler-t-max 必须不小于实际 epochs")
+    return resolved
+
+
+def _validate_milestone_targets(directory: Path, epochs: tuple[int, ...]) -> None:
+    """训练开始前拒绝覆盖任一已有里程碑，避免半程才发现产物冲突。"""
+
+    existing = [directory / f"epoch-{epoch:03d}.pt" for epoch in epochs]
+    conflicts = [path for path in existing if path.exists()]
+    if conflicts:
+        raise FileExistsError(f"拒绝覆盖已有 milestone checkpoint：{conflicts[0]}")
+
+
+def _save_milestone_checkpoint(
+    checkpoint: dict[str, object],
+    directory: Path,
+    epoch: int,
+) -> dict[str, object]:
+    """保存当轮 checkpoint 并返回可写入 run.json 的内容身份。"""
+
+    path = directory / f"epoch-{epoch:03d}.pt"
+    if path.exists():
+        raise FileExistsError(f"拒绝覆盖已有 milestone checkpoint：{path}")
+    if int(checkpoint.get("epoch", -1)) != epoch:
+        raise ValueError("milestone epoch 与 checkpoint state 不一致")
+    torch.save(checkpoint, path)
+    return {
+        "epoch": epoch,
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_run_metadata(output_directory: Path, metadata: dict[str, object]) -> None:
     (output_directory / "run.json").write_text(
-        json.dumps(run_metadata, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return 0
 
 
 def _run_epoch(
@@ -667,15 +792,15 @@ def _participating_losses(profile: str) -> list[str]:
 def _geometry_selection_key(metrics: dict[str, object]) -> tuple[float, float, float, float]:
     """以联合 tail 质量优先选几何 checkpoint，不混入 class/outer/rejection。
 
-    NCE 已按图像对角线归一化，与 IoU 同处约 [0,1]。首项联合约束 P95 NCE 与
-    P05 IoU，避免只因 P95 改善几个千分点就选择一个 P05 已经崩为 0 的 checkpoint。
+    NCE 已按目标包围盒对角线归一化。首项联合约束 P95 NCE 与 P05 IoU，
+    次项联合约束 median，避免 tail 改善时静默牺牲典型样本。
     """
 
     nce_p95 = float(metrics["content_corner_nce_p95"])
     iou_p05 = float(metrics["content_iou_p05"])
     return (
         (1.0 - nce_p95) + iou_p05,
-        float(metrics["content_iou_median"]),
+        (1.0 - float(metrics["content_corner_nce_median"])) + float(metrics["content_iou_median"]),
         float(metrics["content_strict_correct_rate"]),
         -nce_p95,
     )
@@ -693,8 +818,7 @@ def _is_geometry_tail_collapse(
     return (
         float(metrics["content_corner_nce_p95"])
         > reference["content_corner_nce_p95"] * nce_p95_ratio
-        and float(metrics["content_iou_p05"])
-        < reference["content_iou_p05"] * iou_p05_ratio
+        and float(metrics["content_iou_p05"]) < reference["content_iou_p05"] * iou_p05_ratio
     )
 
 
@@ -704,16 +828,21 @@ def _is_geometry_eligible(
     *,
     nce_p95_ratio: float,
     iou_p05_ratio: float,
+    nce_median_tolerance: float,
+    iou_median_tolerance: float,
 ) -> bool:
-    """只允许未突破 epoch 0 tail 安全线的 checkpoint 竞争 best_geometry。"""
+    """只允许同时守住 epoch 0 median 与 tail 的 checkpoint 竞争 best_geometry。"""
 
     if reference is None:
         raise RuntimeError("best_geometry eligibility 缺少 epoch 0 reference")
     return (
-        float(metrics["content_corner_nce_p95"])
+        float(metrics["content_corner_nce_median"])
+        <= reference["content_corner_nce_median"] + nce_median_tolerance
+        and float(metrics["content_iou_median"])
+        >= reference["content_iou_median"] - iou_median_tolerance
+        and float(metrics["content_corner_nce_p95"])
         <= reference["content_corner_nce_p95"] * nce_p95_ratio
-        and float(metrics["content_iou_p05"])
-        >= reference["content_iou_p05"] * iou_p05_ratio
+        and float(metrics["content_iou_p05"]) >= reference["content_iou_p05"] * iou_p05_ratio
     )
 
 

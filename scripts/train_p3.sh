@@ -168,12 +168,13 @@ geometry_evaluate() {
   local model="$1"
   local output_directory="$2"
   local calibrator="${3:-}"
+  local split="${4:-validation}"
   fresh_directory "$output_directory"
   local arguments=(
     --data-directory "$SMARTDOC_DIRECTORY"
     --manifest "$SMARTDOC_MANIFEST"
     --dataset-root "$DATA_ROOT"
-    --split test
+    --split "$split"
     --quad-model "$model"
     --output "$output_directory/evaluation.json"
   )
@@ -189,7 +190,7 @@ geometry_evaluate() {
   local overlay_arguments=(
     --manifest "$SMARTDOC_MANIFEST"
     --dataset-root "$DATA_ROOT"
-    --split test
+    --split "$split"
     --quad-model "$model"
     --output-directory "$output_directory/contact-sheets"
     --max-images "${P3_GEOMETRY_OVERLAY_SAMPLES:-80}"
@@ -449,7 +450,8 @@ case "$STAGE" in
       model="$RUN_DIRECTORY/geometry-b5/quadlocator-s.onnx"
       calibrator="$RUN_DIRECTORY/geometry-b5/calibration/correctness-calibrator.json"
     fi
-    geometry_evaluate "$model" "$RUN_DIRECTORY/evaluate" "$calibrator"
+    # 只有 checkpoint、阈值和 calibrator 全部冻结后的最终阶段读取一次 test。
+    geometry_evaluate "$model" "$RUN_DIRECTORY/evaluate" "$calibrator" test
     ;;
   report)
     python scripts/generate_p3_report.py \
