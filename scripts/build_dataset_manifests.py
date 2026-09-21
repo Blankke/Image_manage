@@ -8,7 +8,9 @@
     python scripts/build_dataset_manifests.py --dataset div2k
 
 SmartDoc 原始标注的角点顺序为 TL、BL、BR、TR。本脚本会明确转换为项目统一的
-TL、TR、BR、BL，并按 document model 分配 split，避免同一作品泄漏。DIV2K 清单
+TL、TR、BR、BL，并按 document model 分配原始 split。SmartDoc 背景跨文档复用，
+该原始 split 只作同场景诊断；公开训练清单构建器会过滤其 validation/test。
+DIV2K 清单
 只列出公开 HR 与可选 x2 bicubic LR 配对；训练时的相机退化应在线生成。
 """
 

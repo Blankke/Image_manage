@@ -7,8 +7,8 @@
     python scripts/evaluate_p4_geometry_trajectory.py \
       --baseline /runs/p2/stage-b/best.pt \
       --checkpoints /runs/p4/checkpoints/epoch-*.pt \
-      --internal-manifest /data/manifests/p2/stage-b.geometry.jsonl \
-      --calibration-manifest /data/manifests/p2/calibration.geometry.jsonl \
+      --internal-manifest /data/manifests/p2-public/stage-b.geometry.jsonl \
+      --calibration-manifest /data/manifests/p2-public/calibration-public.geometry.jsonl \
       --smartdoc-manifest /data/manifests/smartdoc.geometry.jsonl \
       --dataset-root /data --evaluation-image-size 512 \
       --device mps --output-directory /runs/p4/trajectory
@@ -42,7 +42,11 @@ from benchmarks.geometry_e2e.run import (  # noqa: E402
     _resolve_manifest_image,
 )
 from scripts.audit_p4_geometry_parity import _prediction_from_raw  # noqa: E402
-from training.quadlocator.model import QuadLocatorS  # noqa: E402
+from training.quadlocator.model import (  # noqa: E402
+    QuadLocatorS,
+    load_quadlocator_state_dict,
+)
+from training.quadlocator.train import _assert_public_training_manifest  # noqa: E402
 
 from screenrestore.geometry.detector import _letterbox_tensor  # noqa: E402
 from screenrestore.io.image_loader import load_image  # noqa: E402
@@ -91,11 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--internal-manifest", type=Path, required=True)
     parser.add_argument("--calibration-manifest", type=Path, required=True)
     parser.add_argument("--smartdoc-manifest", type=Path, required=True)
-    parser.add_argument(
-        "--private-validation-manifest",
-        type=Path,
-        help="可选独立 private validation；作为单独 eligibility/Pareto slice，不与其它集合合并",
-    )
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--internal-max-samples", type=int, default=1000)
     parser.add_argument("--internal-seed", type=int, default=20260902)
@@ -123,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     if any(value < 0.0 for value in tolerances.values()):
         raise ValueError("eligibility tolerance 不能为负数")
+    # 该入口会选择 checkpoint，所有参与排序的清单均须为公开数据。
+    for manifest in (args.internal_manifest, args.calibration_manifest, args.smartdoc_manifest):
+        _assert_public_training_manifest(manifest)
     output_directory = args.output_directory.expanduser().resolve()
     if output_directory.exists():
         raise FileExistsError(f"拒绝覆盖已有 trajectory 目录：{output_directory}")
@@ -140,10 +142,6 @@ def main(argv: list[str] | None = None) -> int:
         _dataset_spec("calibration", args.calibration_manifest, root),
         _dataset_spec("smartdoc_validation", args.smartdoc_manifest, root),
     ]
-    if args.private_validation_manifest is not None:
-        datasets_list.append(
-            _dataset_spec("private_validation", args.private_validation_manifest, root)
-        )
     datasets = tuple(datasets_list)
     dataset_order = tuple(dataset.name for dataset in datasets)
     all_paths = tuple(sorted({path for dataset in datasets for path in dataset.paths}))
@@ -184,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         report = {
             "format_version": 2,
+            "metric_version": 2,
+            "nce_normalization": "target_quad_bbox_diagonal",
             "kind": "p4_geometry_trajectory_validation",
             "protocol": "photo_only_then_frozen_validation_gt_common_input",
             "split": "validation",
@@ -199,13 +199,14 @@ def main(argv: list[str] | None = None) -> int:
             "internal_validation": "trajectory-validation.json",
             "calibration": "trajectory-calibration.json",
             "smartdoc_validation": "trajectory-smartdoc-validation.json",
-            "private_validation": "trajectory-private-validation.json",
         }[dataset.name]
         _write_json(output_directory / filename, report)
 
     selection = select_checkpoint(reports, tolerances, dataset_order=dataset_order)
     summary = {
         "format_version": 2,
+        "metric_version": 2,
+        "nce_normalization": "target_quad_bbox_diagonal",
         "kind": "p4_geometry_trajectory_summary",
         "protocol": "validation_only_checkpoint_selection_common_input",
         "test_data_used": False,
@@ -218,7 +219,6 @@ def main(argv: list[str] | None = None) -> int:
             "SmartDoc validation: higher IoU median",
             "calibration 同顺序",
             "internal validation 同顺序",
-            "optional private validation 仅作末级 tie-breaker，并始终参与 eligibility/Pareto",
         ],
         "eligibility_tolerances_absolute": tolerances,
         "selection": selection,
@@ -461,7 +461,7 @@ def _infer_checkpoint(
 ) -> dict[Path, dict[str, Any]]:
     payload = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
     model = QuadLocatorS(checkpoint.width_multiplier)
-    model.load_state_dict(payload["state_dict"], strict=True)
+    load_quadlocator_state_dict(model, payload["state_dict"])
     model.to(device).eval()
     predictions: dict[Path, dict[str, Any]] = {}
     for start in range(0, len(paths), batch_size):

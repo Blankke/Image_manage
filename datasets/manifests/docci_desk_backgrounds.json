@@ -1,0 +1,15 @@
+{
+  "dataset": "DOCCI",
+  "reviewed_date": "2026-09-18",
+  "source_split": "train",
+  "source_license": "CC BY 4.0",
+  "source_page": "https://google.github.io/docci/",
+  "review_scope": "两种合成画幅均已视觉复核；桌面占主体，纸面下没有露出的立体物体",
+  "photos": [
+    {"example_id": "train_00053", "cluster_id": "124"},
+    {"example_id": "train_01820", "cluster_id": "21"},
+    {"example_id": "train_01830", "cluster_id": "124"},
+    {"example_id": "train_02058", "cluster_id": "21"},
+    {"example_id": "train_07281", "cluster_id": "21"}
+  ]
+}

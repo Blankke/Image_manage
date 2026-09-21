@@ -184,10 +184,11 @@ def _fit_edge(
         np.clip(round(length / 6.0), params.min_valid_samples, params.samples_per_edge)
     )
     offsets = np.arange(-band, band + 1, dtype=np.float64)
-    points: list[np.ndarray] = []
-    strengths: list[float] = []
-    alignments: list[float] = []
-    boundary_values: list[float] = []
+    bases: list[np.ndarray] = []
+    response_rows: list[np.ndarray] = []
+    raw_response_rows: list[np.ndarray] = []
+    magnitude_rows: list[np.ndarray] = []
+    boundary_rows: list[np.ndarray] = []
     height, width = gradient_x.shape
     for position in np.linspace(0.04, 0.96, sample_count):
         base = start.astype(np.float64) + position * vector
@@ -197,21 +198,48 @@ def _fit_edge(
         valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
         if np.count_nonzero(valid) < 3:
             continue
-        xs = xs[valid]
-        ys = ys[valid]
-        responses = np.abs(gradient_x[ys, xs] * normal[0] + gradient_y[ys, xs] * normal[1])
+        valid_indices = np.flatnonzero(valid)
+        valid_xs = xs[valid]
+        valid_ys = ys[valid]
+        raw_responses = np.abs(
+            gradient_x[valid_ys, valid_xs] * normal[0]
+            + gradient_y[valid_ys, valid_xs] * normal[1]
+        )
+        responses = raw_responses.copy()
+        boundary_values = np.zeros_like(responses)
         if boundary is not None:
-            responses = responses * (0.55 + 0.45 * boundary[ys, xs])
-        peak = int(np.argmax(responses))
-        points.append(np.array([xs[peak], ys[peak]], dtype=np.float64))
-        strengths.append(float(responses[peak]))
-        magnitude = float(np.hypot(gradient_x[ys[peak], xs[peak]], gradient_y[ys[peak], xs[peak]]))
-        alignments.append(float(np.clip(responses[peak] / max(magnitude, 1e-8), 0.0, 1.0)))
-        boundary_values.append(float(boundary[ys[peak], xs[peak]]) if boundary is not None else 0.0)
-    if len(points) < params.min_valid_samples:
+            boundary_values = boundary[valid_ys, valid_xs]
+            responses = responses * (0.55 + 0.45 * boundary_values)
+        response_row = np.full(len(offsets), -np.inf, dtype=np.float64)
+        raw_response_row = np.zeros(len(offsets), dtype=np.float64)
+        magnitude_row = np.zeros(len(offsets), dtype=np.float64)
+        boundary_row = np.zeros(len(offsets), dtype=np.float64)
+        response_row[valid_indices] = responses
+        raw_response_row[valid_indices] = raw_responses
+        magnitude_row[valid_indices] = np.hypot(
+            gradient_x[valid_ys, valid_xs], gradient_y[valid_ys, valid_xs]
+        )
+        boundary_row[valid_indices] = boundary_values
+        bases.append(base)
+        response_rows.append(response_row)
+        raw_response_rows.append(raw_response_row)
+        magnitude_rows.append(magnitude_row)
+        boundary_rows.append(boundary_row)
+    if len(bases) < params.min_valid_samples:
         return None
-    point_array = np.asarray(points, dtype=np.float64)
-    strength_array = np.asarray(strengths, dtype=np.float64)
+    response_matrix = np.asarray(response_rows, dtype=np.float64)
+    peak_indices = _straight_edge_peak_indices(response_matrix, offsets, band)
+    base_array = np.asarray(bases, dtype=np.float64)
+    selected_offsets = offsets[peak_indices]
+    point_array = base_array + selected_offsets[:, None] * normal[None, :]
+    point_array[:, 0] = np.clip(np.rint(point_array[:, 0]), 0, width - 1)
+    point_array[:, 1] = np.clip(np.rint(point_array[:, 1]), 0, height - 1)
+    row_indices = np.arange(len(peak_indices))
+    strength_array = response_matrix[row_indices, peak_indices]
+    raw_strength = np.asarray(raw_response_rows)[row_indices, peak_indices]
+    magnitudes = np.asarray(magnitude_rows)[row_indices, peak_indices]
+    alignment_array = np.clip(raw_strength / np.maximum(magnitudes, 1e-8), 0.0, 1.0)
+    boundary_array = np.asarray(boundary_rows)[row_indices, peak_indices]
     positive = strength_array[strength_array > 0]
     if positive.size < params.min_valid_samples:
         return None
@@ -225,10 +253,10 @@ def _fit_edge(
     # Sobel 响应的 0.35 左右已经是很强的边；该归一化只用于接受/拒绝，不做概率解释。
     support = float(np.clip(np.median(strength_array[keep]) / 0.35, 0.0, 1.0))
     residuals = np.abs(point_array @ line[:2] + line[2])
-    kept_indices = np.flatnonzero(keep)
+    # 连续覆盖率描述“沿边是否持续存在可观测梯度”。拟合时丢弃低分位异常点是
+    # 稳健估计手段，不能反过来人为制造 28% 的断点，因此这里使用绝对观测门。
+    kept_indices = np.flatnonzero(strength_array >= 0.012)
     longest_run = _longest_consecutive_run(kept_indices)
-    alignment_array = np.asarray(alignments, np.float64)
-    boundary_array = np.asarray(boundary_values, np.float64)
     diagnostics = {
         "residual_median": float(np.median(residuals[keep])),
         "residual_p95": float(np.percentile(residuals[keep], 95)),
@@ -239,6 +267,51 @@ def _fit_edge(
         else 0.0,
     }
     return line, support, diagnostics
+
+
+def _straight_edge_peak_indices(
+    responses: np.ndarray,
+    offsets: np.ndarray,
+    band: int,
+) -> np.ndarray:
+    """在窄带内联合搜索整条直线，抑制纹理峰之间的逐点跳跃。
+
+    平面矩形经针孔投影后每条边仍为直线，因此同时搜索起点与终点法向偏移，比逐点
+    贪心或仅约束相邻步长更贴合成像模型。分数兼顾低分位响应和均值，只有持续可见的
+    边才能胜过偶发的内部纹理；轻微零位移先验用于避免无证据时跳到相邻外框。
+    """
+
+    if responses.ndim != 2 or responses.shape[0] < 2 or responses.shape[1] != len(offsets):
+        raise ValueError("边缘响应必须为 N×offsets 且至少包含两个采样点")
+    finite = np.isfinite(responses)
+    positive = responses[finite & (responses > 0)]
+    if positive.size == 0:
+        return np.zeros(responses.shape[0], dtype=np.int64)
+    scale = max(float(np.percentile(positive, 90)), 0.012)
+    emission = np.where(finite, np.clip(responses / scale, 0.0, 2.5), -2.5)
+    rows, columns = emission.shape
+    # 两像素粗搜将候选数控制在约 5k；随后每个采样点只在预测直线附近一像素内
+    # 取峰，既保留亚像素前的局部适应，也不会跳到远处纹理。
+    candidate_columns = np.arange(0, columns, 2, dtype=np.int32)
+    if candidate_columns[-1] != columns - 1:
+        candidate_columns = np.r_[candidate_columns, columns - 1]
+    start = candidate_columns[:, None, None]
+    end = candidate_columns[None, :, None]
+    positions = np.linspace(0.0, 1.0, rows, dtype=np.float64)[None, None, :]
+    paths = np.rint(start * (1.0 - positions) + end * positions).astype(np.int32)
+    path_values = emission[np.arange(rows)[None, None, :], paths]
+    scores = 0.65 * np.percentile(path_values, 25, axis=2) + 0.35 * np.mean(
+        path_values, axis=2
+    )
+    normalized = np.abs(offsets[candidate_columns]) / max(1.0, float(band))
+    scores -= 0.05 * (normalized[:, None] ** 2 + normalized[None, :] ** 2)
+    best_start, best_end = np.unravel_index(int(np.argmax(scores)), scores.shape)
+    result = paths[best_start, best_end].copy()
+    for row in range(rows):
+        left = max(0, int(result[row]) - 1)
+        right = min(columns, int(result[row]) + 2)
+        result[row] = left + int(np.argmax(responses[row, left:right]))
+    return result.astype(np.int64)
 
 
 def _longest_consecutive_run(indices: np.ndarray) -> int:

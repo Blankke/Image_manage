@@ -9,18 +9,17 @@
 #   bash scripts/train_p2_geometry.sh preflight
 #   bash scripts/train_p2_geometry.sh stage-a
 #   bash scripts/train_p2_geometry.sh stage-b
-#   bash scripts/train_p2_geometry.sh stage-c
 #   bash scripts/train_p2_geometry.sh stage-d
 #
 # 对 width_multiplier=1.5 做独立实验时，使用新的 RUN_NAME 并设置 P2_WIDTH=1.5，
 # 从 stage-a 重新开始。每个 stage 训练完成后自动导出 ONNX、运行诊断 benchmark 并生成
-# public validation 50 张及 private validation/test 全量 overlay。benchmark FAIL 不会伪装为成功。
+# public validation 50 张 overlay。私人开发集使用独立冻结预测入口。
 
 set -euo pipefail
 
 STAGE="${1:-}"
-if [[ "$STAGE" != "preflight" && "$STAGE" != "stage-a" && "$STAGE" != "stage-b" && "$STAGE" != "stage-c" && "$STAGE" != "stage-d" && "$STAGE" != "all" ]]; then
-  echo "用法：bash scripts/train_p2_geometry.sh [preflight|stage-a|stage-b|stage-c|stage-d|all]" >&2
+if [[ "$STAGE" != "preflight" && "$STAGE" != "stage-a" && "$STAGE" != "stage-b" && "$STAGE" != "stage-d" && "$STAGE" != "all" ]]; then
+  echo "用法：bash scripts/train_p2_geometry.sh [preflight|stage-a|stage-b|stage-d|all]" >&2
   exit 2
 fi
 
@@ -29,6 +28,7 @@ DATA_ROOT="${SCREENRESTORE_DATA_ROOT:-$HOME/screenrestore-data}"
 RUN_ROOT="${SCREENRESTORE_RUN_ROOT:-$HOME/screenrestore-runs}"
 RUN_NAME="${SCREENRESTORE_RUN_NAME:-p2-geometry-manual}"
 RUN_DIRECTORY="$RUN_ROOT/$RUN_NAME"
+MANIFEST_DIRECTORY="${P2_MANIFEST_DIRECTORY:-$DATA_ROOT/manifests/p13-public-base}"
 P1_CHECKPOINT="${P1_GEOMETRY_CHECKPOINT:-/Users/caozichen/screenrestore-runs/p1-full-20260828-133513/geometry/best.pt}"
 WIDTH="${P2_WIDTH:-1.0}"
 IMAGE_SIZE="${P2_IMAGE_SIZE:-512}"
@@ -62,12 +62,10 @@ ensure_fresh_stage() {
 
 preflight_inputs() {
   require_path "$P1_CHECKPOINT"
-  require_path "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl"
-  require_path "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
-  require_path "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl"
-  require_path "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl"
+  require_path "$MANIFEST_DIRECTORY/stage-a.geometry.jsonl"
+  require_path "$MANIFEST_DIRECTORY/stage-b.geometry.jsonl"
+  require_path "$MANIFEST_DIRECTORY/calibration-public.geometry.jsonl"
   require_path "$DATA_ROOT/manifests/smartdoc.geometry.jsonl"
-  require_path "$DATA_ROOT/private/geometry.annotations.jsonl"
 
   local data_kib free_kib
   data_kib="$(du -sk "$DATA_ROOT" | awk '{print $1}')"
@@ -92,27 +90,28 @@ PY
 
   # 只解析清单与检查相对图片路径，不创建模型、optimizer 或 checkpoint。
   python - "$DATA_ROOT" \
-    "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl" \
-    "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl" \
-    "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl" \
-    "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl" <<'PY'
+    "$MANIFEST_DIRECTORY/stage-a.geometry.jsonl" \
+    "$MANIFEST_DIRECTORY/stage-b.geometry.jsonl" \
+    "$MANIFEST_DIRECTORY/calibration-public.geometry.jsonl" <<'PY'
 import sys
 from collections import Counter
 from pathlib import Path
 
 from training.quadlocator.dataset import _read_manifest
+from training.quadlocator.train import _assert_public_training_manifest
 
 data_root = Path(sys.argv[1]).resolve()
 for value in sys.argv[2:]:
     manifest = Path(value).resolve()
+    _assert_public_training_manifest(manifest)
     records = _read_manifest(manifest)
     missing = [record["image"] for record in records if not (data_root / record["image"]).is_file()]
     if missing:
         raise SystemExit(f"{manifest.name} 有 {len(missing)} 条图片路径不存在")
     splits = Counter(str(record["split"]) for record in records)
-    if manifest.name != "calibration.geometry.jsonl" and not {"train", "validation"} <= splits.keys():
+    if manifest.name != "calibration-public.geometry.jsonl" and not {"train", "validation"} <= splits.keys():
         raise SystemExit(f"{manifest.name} 缺少 train 或 validation")
-    if manifest.name == "calibration.geometry.jsonl" and set(splits) != {"validation"}:
+    if manifest.name == "calibration-public.geometry.jsonl" and set(splits) != {"validation"}:
         raise SystemExit("calibration 清单只能包含 validation")
     print(f"preflight {manifest.name}: samples={len(records)} splits={dict(sorted(splits.items()))}")
 PY
@@ -130,17 +129,6 @@ render_stage_overlays() {
     --max-images 50 \
     --quad-model "$model" \
     --output-directory "$stage_directory/overlays-public-validation"
-  if [[ -f "$DATA_ROOT/private/geometry.annotations.jsonl" ]]; then
-    for split in validation test; do
-      python scripts/render_geometry_overlays.py \
-        --manifest "$DATA_ROOT/private/geometry.annotations.jsonl" \
-        --dataset-root "$DATA_ROOT" \
-        --split "$split" \
-        --max-images 0 \
-        --quad-model "$model" \
-        --output-directory "$stage_directory/overlays-private-$split"
-    done
-  fi
 }
 
 evaluate_smartdoc() {
@@ -160,11 +148,11 @@ evaluate_smartdoc() {
 
 run_stage_a() {
   require_path "$P1_CHECKPOINT"
-  require_path "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl"
+  require_path "$MANIFEST_DIRECTORY/stage-a.geometry.jsonl"
   local output="$RUN_DIRECTORY/stage-a"
   ensure_fresh_stage "$output"
   python -m training.quadlocator.train \
-    --manifest "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl" \
+    --manifest "$MANIFEST_DIRECTORY/stage-a.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output-directory "$output" \
     --init-checkpoint "$P1_CHECKPOINT" \
@@ -180,16 +168,16 @@ run_stage_a() {
     --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
   evaluate_smartdoc "$output"
-  render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-a.geometry.jsonl"
+  render_stage_overlays "$output" "$MANIFEST_DIRECTORY/stage-a.geometry.jsonl"
 }
 
 run_stage_b() {
   require_path "$RUN_DIRECTORY/stage-a/best_geometry.pt"
-  require_path "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
+  require_path "$MANIFEST_DIRECTORY/stage-b.geometry.jsonl"
   local output="$RUN_DIRECTORY/stage-b"
   ensure_fresh_stage "$output"
   python -m training.quadlocator.train \
-    --manifest "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl" \
+    --manifest "$MANIFEST_DIRECTORY/stage-b.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output-directory "$output" \
     --init-checkpoint "$RUN_DIRECTORY/stage-a/best_geometry.pt" \
@@ -206,42 +194,16 @@ run_stage_b() {
     --checkpoint "$output/best_geometry.pt" \
     --output "$output/quadlocator-s.onnx"
   evaluate_smartdoc "$output"
-  render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
-}
-
-run_stage_c() {
-  require_path "$RUN_DIRECTORY/stage-b/best_geometry.pt"
-  require_path "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl"
-  local output="$RUN_DIRECTORY/stage-c"
-  ensure_fresh_stage "$output"
-  python -m training.quadlocator.train \
-    --manifest "$DATA_ROOT/manifests/p2/stage-c.geometry.jsonl" \
-    --dataset-root "$DATA_ROOT" \
-    --output-directory "$output" \
-    --init-checkpoint "$RUN_DIRECTORY/stage-b/best_geometry.pt" \
-    --epochs 8 \
-    --early-stopping-patience 3 \
-    --learning-rate 7.5e-5 \
-    --image-size "$IMAGE_SIZE" \
-    --width-multiplier "$WIDTH" \
-    --batch-size "$BATCH_SIZE" \
-    --workers "$WORKERS" \
-    --device "$DEVICE" \
-    --seed "$SEED"
-  python -m training.quadlocator.export_onnx \
-    --checkpoint "$output/best_geometry.pt" \
-    --output "$output/quadlocator-s.onnx"
-  evaluate_smartdoc "$output"
-  render_stage_overlays "$output" "$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
+  render_stage_overlays "$output" "$MANIFEST_DIRECTORY/stage-b.geometry.jsonl"
 }
 
 run_stage_d() {
-  require_path "$RUN_DIRECTORY/stage-c/best_geometry.pt"
-  require_path "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl"
+  require_path "$RUN_DIRECTORY/stage-b/best_geometry.pt"
+  require_path "$MANIFEST_DIRECTORY/calibration-public.geometry.jsonl"
   mkdir -p "$RUN_DIRECTORY/stage-d"
   python -m training.quadlocator.calibrate \
-    --checkpoint "$RUN_DIRECTORY/stage-c/best_geometry.pt" \
-    --manifest "$DATA_ROOT/manifests/p2/calibration.geometry.jsonl" \
+    --checkpoint "$RUN_DIRECTORY/stage-b/best_geometry.pt" \
+    --manifest "$MANIFEST_DIRECTORY/calibration-public.geometry.jsonl" \
     --dataset-root "$DATA_ROOT" \
     --output "$RUN_DIRECTORY/stage-d/calibration.json" \
     --batch-size "$BATCH_SIZE" \
@@ -254,13 +216,11 @@ case "$STAGE" in
   preflight) preflight_inputs ;;
   stage-a) run_stage_a ;;
   stage-b) run_stage_b ;;
-  stage-c) run_stage_c ;;
   stage-d) run_stage_d ;;
   all)
     preflight_inputs
     run_stage_a
     run_stage_b
-    run_stage_c
     run_stage_d
     ;;
 esac

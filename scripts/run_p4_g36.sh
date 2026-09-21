@@ -22,6 +22,8 @@ run_root="${SCREENRESTORE_RUN_ROOT:-/Users/caozichen/screenrestore-runs}"
 run_directory="${P4_G36_RUN_DIRECTORY:-$run_root/p4-g36-geometry-freeze}"
 device="${P4_DEVICE:-mps}"
 python_bin="$project_directory/.venv/bin/python"
+source "$project_directory/.venv/bin/activate"
+which python
 b0_checkpoint="$run_root/p2-geometry-w1-20260829-110658/stage-b/best.pt"
 trajectory_directory="$run_directory/coordinate-trajectory"
 selection_directory="$run_directory/trajectory-selection"
@@ -49,9 +51,20 @@ preflight() {
   fi
   require_file "$python_bin"
   require_file "$b0_checkpoint"
-  require_file "$data_root/manifests/p2/stage-b.geometry.jsonl"
-  require_file "$data_root/manifests/p2/calibration.geometry.jsonl"
+  require_file "$data_root/manifests/p2-public/stage-b.geometry.jsonl"
+  require_file "$data_root/manifests/p2-public/calibration-public.geometry.jsonl"
   require_file "$data_root/manifests/smartdoc.geometry.jsonl"
+  "$python_bin" - "$data_root/manifests/p2-public/stage-b.geometry.jsonl" \
+    "$data_root/manifests/p2-public/calibration-public.geometry.jsonl" <<'PY'
+import sys
+from pathlib import Path
+
+from training.quadlocator.train import _assert_public_training_manifest
+
+for manifest in sys.argv[1:]:
+    _assert_public_training_manifest(Path(manifest))
+print("公开训练与校准清单检查=PASS")
+PY
   local data_kib
   data_kib="$(du -sk "$data_root" | awk '{print $1}')"
   if (( data_kib > 30 * 1024 * 1024 )); then
@@ -65,7 +78,7 @@ run_train() {
   require_absent "$trajectory_directory"
   mkdir -p "$run_directory"
   "$python_bin" -m training.quadlocator.train \
-    --manifest "$data_root/manifests/p2/stage-b.geometry.jsonl" \
+    --manifest "$data_root/manifests/p2-public/stage-b.geometry.jsonl" \
     --dataset-root "$data_root" \
     --output-directory "$trajectory_directory" \
     --init-checkpoint "$b0_checkpoint" \
@@ -93,8 +106,8 @@ run_select() {
   if "$python_bin" scripts/evaluate_p4_geometry_trajectory.py \
     --baseline "$b0_checkpoint" \
     --checkpoints "${checkpoints[@]}" \
-    --internal-manifest "$data_root/manifests/p2/stage-b.geometry.jsonl" \
-    --calibration-manifest "$data_root/manifests/p2/calibration.geometry.jsonl" \
+    --internal-manifest "$data_root/manifests/p2-public/stage-b.geometry.jsonl" \
+    --calibration-manifest "$data_root/manifests/p2-public/calibration-public.geometry.jsonl" \
     --smartdoc-manifest "$data_root/manifests/smartdoc.geometry.jsonl" \
     --dataset-root "$data_root" --internal-max-samples 1000 --internal-seed 20260902 \
     --evaluation-image-size 512 \
@@ -132,7 +145,7 @@ run_acceptance() {
   require_absent "$acceptance_directory"
   "$python_bin" scripts/audit_p4_acceptance.py --mode validation \
     --checkpoint "$checkpoint" \
-    --manifest "$data_root/manifests/p2/calibration.geometry.jsonl" \
+    --manifest "$data_root/manifests/p2-public/calibration-public.geometry.jsonl" \
     --dataset-root "$data_root" --device "$device" --batch-size 8 \
     --output-directory "$acceptance_directory"
 }
@@ -151,8 +164,8 @@ run_test() {
     --device "$device" --batch-size 8 --output-directory "$test_directory"
 }
 
-preflight
 cd "$project_directory"
+preflight
 case "$stage" in
   train) run_train ;;
   select) run_select ;;

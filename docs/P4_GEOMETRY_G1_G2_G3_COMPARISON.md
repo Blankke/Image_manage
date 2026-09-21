@@ -230,3 +230,20 @@ validation IoU median 退化 `0.01595`，状态继续为 `NO_ELIGIBLE_CHECKPOINT
 median `0.09001`、IoU median `0.75812`，已经接近冻结 evaluator 的 `0.08926`、`0.75817`；而
 256 输入训练侧分别为 `0.25483`、`0.45141`。下一轮改为在 B0 原生 512 分辨率做单轮训练，验证
 训练/部署分辨率一致性是否能消除 IoU median 交换。
+
+原生 512、`content_only`、无 augmentation、`1e-6` 的单轮结果仍未消除交换。共同 512 评估中，
+internal 的 NCE median/P95 分别变化 `+0.00025`/`+0.00103`，IoU median/P05 分别变化
+`-0.01384`/`+0.01027`；calibration 四项变化为 `+0.00143`/`-0.00054`/`-0.00734`/`-0.00459`；
+SmartDoc validation 四项变化为 `+0.00272`/`-0.00130`/`-0.01463`/`+0.00430`。internal 与
+SmartDoc validation 的 IoU median 均超过 `0.01` 容差，SmartDoc NCE median 也超过 `0.002`
+容差，因此状态仍为 `NO_ELIGIBLE_CHECKPOINT`。输入尺寸错配不是 median preservation 失败的
+唯一原因。下一轮保持所有参数不变，仅将 loss profile 改为 `content_coordinate_only`，分离
+heatmap loss 与 coordinate loss 对同一 content corner head 的影响。
+
+原生 512、`content_coordinate_only`、无 augmentation、`1e-6` 的单轮结果进一步缩小了偏移：
+internal 四项变化为 `+0.00003`/`+0.00504`/`-0.01137`/`-0.00957`，calibration 为
+`+0.00012`/`-0.00028`/`-0.00306`/`-0.00766`，SmartDoc validation 为
+`+0.00173`/`-0.00226`/`-0.01099`/`+0.00430`。calibration 全部通过，SmartDoc NCE median
+也回到容差内；剩余失败项仅比预注册容差多 `0.00004`、`0.00137` 和 `0.00099`，状态仍为
+`NO_ELIGIBLE_CHECKPOINT`。这支持 heatmap loss 会放大漂移，但 coordinate loss 自身仍会造成轻微
+median 交换。下一轮仅将 coordinate-only 学习率减半至 `5e-7`，检验偏移是否按更新步长收缩。

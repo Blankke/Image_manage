@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 
+from screenrestore.validation.geometry_benchmark import corner_metrics
 from training.quadlocator.losses import _softargmax_corners
 
 
@@ -48,6 +49,11 @@ class ValidationMetrics:
             _softargmax_corners(outputs["content_corner_heatmaps"]).detach().cpu().numpy()
         )
         outer_corners = _softargmax_corners(outputs["outer_corner_heatmaps"]).detach().cpu().numpy()
+        if "image_bounds" in targets:
+            # 部署 decoder 把 padding 中的峰投回原图时会裁剪；训练验证同步该语义。
+            bounds = targets["image_bounds"].detach().cpu().numpy()
+            content_corners = np.clip(content_corners, bounds[:, None, :2], bounds[:, None, 2:])
+            outer_corners = np.clip(outer_corners, bounds[:, None, :2], bounds[:, None, 2:])
         content_target = targets["content_corners"].detach().cpu().numpy()
         outer_target = targets["outer_corners"].detach().cpu().numpy()
         present = targets["presence"].detach().cpu().numpy().reshape(-1) >= 0.5
@@ -176,6 +182,8 @@ class ValidationMetrics:
             self.boundary_negative_histogram,
         )
         result: dict[str, object] = {
+            "metric_version": 2,
+            "nce_normalization": "target_quad_bbox_diagonal",
             "content_corner_nce_median": _percentile(self.content_nce, 50),
             "content_corner_nce_p95": _percentile(self.content_nce, 95, empty=1.0),
             "content_iou_median": _percentile(self.content_iou, 50),
@@ -253,20 +261,23 @@ def _binary_curve_from_histograms(
 def _corner_nce(predicted: np.ndarray, target: np.ndarray) -> float:
     # 与产品 benchmark 统一使用目标四角包围盒对角线。整图对角线会让小目标的
     # 误差看起来异常乐观，并使训练期 best/watchdog 与冻结评估产生不同结论。
-    target_diagonal = float(np.linalg.norm(target.max(axis=0) - target.min(axis=0)))
-    return float(np.mean(np.linalg.norm(predicted - target, axis=1)) / max(target_diagonal, 1e-8))
+    # 冻结 benchmark 使用循环/反向最优对应，训练验证也复用同一实现。
+    # 放大归一化坐标，避免像素 API 的最小 1px 分母改变小目标 NCE。
+    diagonal = float(np.linalg.norm(target.max(axis=0) - target.min(axis=0)))
+    if diagonal <= 1e-8:
+        return 1.0
+    scale = 1024.0 / diagonal
+    try:
+        return corner_metrics(predicted * scale, target * scale)[0]
+    except ValueError:
+        return 1.0
 
 
 def _quad_iou(predicted: np.ndarray, target: np.ndarray) -> float:
-    predicted = cv2.convexHull(predicted.astype(np.float32)).reshape(-1, 2)
-    target = cv2.convexHull(target.astype(np.float32)).reshape(-1, 2)
-    if len(predicted) != 4 or len(target) != 4:
+    try:
+        return corner_metrics(predicted * 1024.0, target * 1024.0)[1]
+    except ValueError:
         return 0.0
-    intersection, _ = cv2.intersectConvexConvex(predicted, target)
-    union = (
-        abs(float(cv2.contourArea(predicted))) + abs(float(cv2.contourArea(target))) - intersection
-    )
-    return float(intersection / union) if union > 1e-8 else 0.0
 
 
 def _contains(outer: np.ndarray, content: np.ndarray) -> bool:

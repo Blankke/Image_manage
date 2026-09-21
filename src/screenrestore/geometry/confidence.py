@@ -198,11 +198,11 @@ def _correctness_features(
         "area_ratio": area_ratio,
         "area_drift": area_drift,
         "aspect_drift": aspect_drift,
-        "mask_consistency": _mask_quad_consistency(prediction, image_shape),
+        "mask_consistency": mask_quad_consistency(prediction, image_shape),
     }
 
 
-def _mask_quad_consistency(
+def mask_quad_consistency(
     prediction: QuadPrediction,
     image_shape: tuple[int, ...],
 ) -> float:
@@ -226,4 +226,4 @@ def _mask_quad_consistency(
     return float(intersection / max(1, union))
 
 
-__all__ = ["CORRECTNESS_FEATURE_NAMES", "ConfidencePolicy"]
+__all__ = ["CORRECTNESS_FEATURE_NAMES", "ConfidencePolicy", "mask_quad_consistency"]

@@ -40,10 +40,17 @@ MCNN `468b2677`、UnDeM `73cb9406`、NAFNet `2b4af71e`、Real-ESRGAN
 
 | 数据源 | 官方入口 | 许可核查 | 本项目选择规则 |
 | --- | --- | --- | --- |
+| [SmartDoc 2015 Challenge 1](https://github.com/jchazalon/smartdoc15-ch1-dataset) | 上游重打包数据与本地 `frames/LICENCE` | CC BY 4.0，需引用 Burie 等人 ICDAR 2015 论文；原始文档图片权利保留 | 真实手机拍摄四角与桌面场景；按 document model 分组，原图与衍生样本不提交仓库 |
+| [A New Image Dataset for Document Corner Localization, v3](https://data.mendeley.com/datasets/x3nm4cxr83/3) | Mendeley Data 数据页、DOI `10.17632/x3nm4cxr83.3` | 数据页标注 CC BY 4.0，需引用 Dizaj 等 MVIP 2020；逐张文档内容与隐私待核查 | 已在仓库外抽样 60 张：有重复布告栏场景及至少一条越界四角，许多标签只表示文档实体；审核前不纳入训练或独立评估 |
+| [DOCCI](https://google.github.io/docci/) | Google 官方数据页与 `google/docci` 数据卡 | 图片和描述为 CC BY 4.0，需引用 Onoe 等 ECCV 2024 | 从真实照片中视觉复核桌面背景；当前索引的 5 张照片归入同一来源家族，只生成 train split，不计入独立验收组 |
+| [Open Images V7](https://storage.googleapis.com/openimages/web/download_v7.html) | 官方物体框与每图来源表；验证集框文件不含原始极值点 | 标注 CC BY 4.0；照片列为 CC BY 2.0，但官方要求到原始页面逐图核实 | 先筛 Poster、Picture frame、Book、Television 的人工框，按作者与照片来源防泄漏；图像、隐私、内容权利及精确 content 四角仍须人工复核 |
+| [Wikimedia Commons 分类与 Imageinfo API](https://commons.wikimedia.org/wiki/Commons:API/MediaWiki) | `Poster displays` 和 `Works of art hanging on the walls` 文件页、逐文件元数据 | 分类本身没有统一图片许可；文件页列出照片许可，画面内作品仍须另核权利 | 仓库外各抽 36 张预览；首批画作有 26 张来自 Tate Britain 同一馆舍系列。按馆舍限制后另抽 29 张，仍含较多远景、多画作或描绘室内的绘画；海报也多为远景及多目标。逐文件、内容、场景和四角审核前均不晋级 |
 | MIDV-500 | `ftp://smartengines.com/midv-500/` | 官方 `license.txt` 为 CC-BY-SA-2.5 | 固定 10/50 document types；同一 document 与相邻视频帧不跨 split |
 | MIDV-Holo | `ftp://smartengines.com/midv-holo/` 与 SmartEngines 官方仓库 | 官方 `license.txt` 为 CC-BY-SA-2.5，并提示 Generated Photos attribution | 按 sample kind×A-E 光照×设备×ID/passport 每格固定抽取 clip；同一虚构 document 的 original/fraud 变体同组 |
 | The Met Collection API | `https://metmuseum.github.io/` | Open Access 数据为 CC0；图像逐对象要求 `isPublicDomain=true` | painting/print/photograph 轮转，要求 primary image，保存 object ID 与来源 metadata |
 | COCO 2017 | `https://cocodataset.org/#download` | 数据集条款与 image-level Flickr license 分别适用 | 仅官方 val2017 5K 背景池，不下载 18 GB train2017 |
+| [SynGallery](https://huggingface.co/datasets/patryk-bartkowiak/SynGallery) | 官方 Hugging Face 数据卡 | 渲染图及打包标为 CC BY 4.0；画作来源 The Met Open Access CC0；数据卡要求归属和论文引用 | 先只抽样核对来源图与展厅视图能否稳健恢复 content 四角；同一 `met_object_id` 的五视角必须同组，完整性和授权检查通过前不纳入训练 |
+| [jsonschema](https://github.com/python-jsonschema/jsonschema) 及其依赖 | 上游项目许可证与已安装 wheel 元数据 | `jsonschema`、`attrs`、`jsonschema-specifications`、`referencing`、`rpds-py` 均为 MIT | 开发依赖，用于验证几何清单结构 |
 
 上述数据、归档、来源 metadata 和生成后的合成图片均只保存在
 `$SCREENRESTORE_DATA_ROOT`，由 `.gitignore` 排除。仓库仅维护 schema、下载与清单生成规则。

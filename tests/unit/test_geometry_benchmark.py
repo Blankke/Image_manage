@@ -9,6 +9,7 @@ from screenrestore.geometry import (
     AspectEstimate,
     LocalizationDecision,
     LocalizationStatus,
+    QuadrilateralCandidate,
     RejectionReason,
     TargetClass,
     TargetLayer,
@@ -47,6 +48,40 @@ def test_perfect_decision_passes_smoke_gate() -> None:
     assert metrics["corner_nce"] == 0.0
     assert metrics["quad_iou"] == 1.0
     assert summary["status"] == "PASS"
+
+
+def test_coarse_selected_is_distinct_from_oracle_best_outer_candidate() -> None:
+    # 后验最优外框不能冒充模型实际选择的 content 粗角点。
+    truth_quad = np.array([[20, 30], [220, 30], [220, 170], [20, 170]], np.float32)
+    coarse = truth_quad + np.array([12, 0], np.float32)
+    decision = LocalizationDecision(
+        status=LocalizationStatus.REJECTED,
+        proposed_corners=coarse,
+        coarse_corners=coarse,
+        outer_corners=truth_quad,
+        target_class=TargetClass.ARTWORK,
+        layer=TargetLayer.CONTENT,
+        confidence=0.5,
+        aspect=None,
+        backend="test",
+        rejection_reasons=(RejectionReason.CORNER_UNCERTAIN,),
+        candidates=(
+            QuadrilateralCandidate(coarse, 0.95, {}, "test", TargetLayer.CONTENT),
+            QuadrilateralCandidate(truth_quad, 0.80, {}, "test", TargetLayer.OUTER),
+        ),
+    )
+
+    metrics = evaluate_geometry_decision(
+        decision, GeometryGroundTruth(truth_quad, TargetClass.ARTWORK)
+    )
+
+    assert metrics["coarse_selected"]["corner_nce"] > 0.0
+    assert metrics["oracle_best_any_candidate"]["layer"] == "outer"
+    assert metrics["oracle_best_any_candidate"]["corner_nce"] == 0.0
+    assert metrics["oracle_best_any_candidate"]["runtime_rank"] == 2
+    assert metrics["oracle_best_content_candidate"]["runtime_rank"] == 1
+    assert [row["runtime_rank"] for row in metrics["oracle_ranked_candidates"]] == [2, 1]
+    assert metrics["refinement_outcome"] == "rolled_back"
 
 
 def test_release_gate_rejects_tiny_smoke_sample_even_when_perfect() -> None:
@@ -112,3 +147,15 @@ def test_manifest_image_is_resolved_from_explicit_dataset_root(tmp_path) -> None
     assert resolved == (root / "geometry/smartdoc/frames/example.jpg").resolve()
     with pytest.raises(ValueError, match="不能越出"):
         _resolve_manifest_image(root, "../private/photo.jpg")
+
+
+def test_manifest_case_id_uses_relative_path_when_filename_can_repeat() -> None:
+    from benchmarks.geometry_e2e.run import _manifest_case_id
+
+    first = {"image": "geometry/midv/scene-a/0001.jpg"}
+    second = {"image": "geometry/midv/scene-b/0001.jpg"}
+
+    assert _manifest_case_id(first) == "geometry/midv/scene-a/0001.jpg"
+    assert _manifest_case_id(second) == "geometry/midv/scene-b/0001.jpg"
+    assert _manifest_case_id({**first, "id": "sample-001"}) == "sample-001"
+    assert _manifest_case_id({**first, "id": ""}) == first["image"]

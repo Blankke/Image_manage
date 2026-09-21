@@ -119,7 +119,8 @@ python -m training.quadlocator.train --manifest /tmp/quad-synth/manifest.jsonl -
 python -m training.quadlocator.export_onnx --checkpoint /tmp/quad-run/best.pt --output /tmp/quadlocator-s.onnx
 ```
 
-真实数据清单遵循 `datasets/schemas/geometry.schema.json`，加载时会拒绝同一 `group_id` 或 `capture_session` 跨训练、验证和测试集。正式 `e2e_auto` 基准在模型完成预测前只读取手机照片：
+真实数据清单遵循 `datasets/schemas/geometry.schema.json`，加载时会拒绝同一作品、
+拍摄会话或 `scene_group_id` 跨训练、验证和测试集。正式 `e2e_auto` 基准在模型完成预测前只读取手机照片：
 
 ```bash
 python -m benchmarks.geometry_e2e.run --quad-model /tmp/quadlocator-s.onnx
@@ -127,7 +128,9 @@ python -m benchmarks.geometry_e2e.run --quad-model /tmp/quadlocator-s.onnx
 
 SmartDoc 等真实数据接入标准 `geometry.schema.json` JSONL 后，可将照片目录与清单一同
 传入。基准先扫描并预测该目录中的照片，全部预测冻结后才读取清单里的类别与四角真值；
-`test` split 默认用于评分，`group_id` 按独立 group 计入 release 最低样本数：
+`test` split 默认用于评分，`group_id` 按独立 group 计入 release 最低样本数。
+SmartDoc 原始 split 按文档模型划分，但桌面场景在 split 间重复；下例仅用于同场景诊断，
+不能作为独立场景或发布验收证据：
 
 ```bash
 python -m benchmarks.geometry_e2e.run \
@@ -137,14 +140,20 @@ python -m benchmarks.geometry_e2e.run \
   --quad-model /tmp/quadlocator-s.onnx
 ```
 
-同一清单用于训练时也必须指定数据根，避免清单位于 `manifests/` 目录时错误地把图片
-解析为其子目录：
+`e2e_auto` 报告协议 v4 分开记录实际选中的 `coarse_selected`、精修后的最终角点指标，
+以及仅供评分诊断的 `oracle_ranked_candidates`。后者按真值重排，保留 `runtime_rank`；
+`oracle_best_content_candidate` 与 `oracle_best_any_candidate` 只能衡量候选池上界，
+不能代表无人值守时模型的选择或接受结果。
+
+训练须使用隔离后的公开清单，并指定数据根，避免把图片解析为 `manifests/` 的子路径。
+SmartDoc、MIDV-500 和 MIDV-Holo 跨文档复用拍摄环境，其原片及衍生图仅保留 train；
+当前 P13 replay 的画作目标域 validation 只有 10 张 SynGallery 合成视角，尚不足以支持发布级结论：
 
 ```bash
 python -m training.quadlocator.train \
-  --manifest "$SCREENRESTORE_DATA_ROOT/manifests/smartdoc.geometry.jsonl" \
+  --manifest "$SCREENRESTORE_DATA_ROOT/manifests/p13/scene-isolated-replay-20260918.geometry.jsonl" \
   --dataset-root "$SCREENRESTORE_DATA_ROOT" \
-  --output-directory "$SCREENRESTORE_RUN_ROOT/geometry/smartdoc"
+  --output-directory "$SCREENRESTORE_RUN_ROOT/geometry/scene-isolated"
 ```
 
 未训练的 smoke checkpoint 只验证接口，不代表模型质量。发布 gate 至少需要 100 个独立实拍 group；当前四场景仅作回归烟测。
@@ -182,10 +191,6 @@ export SCREENRESTORE_RUN_ROOT="$HOME/screenrestore-runs"
 
 python scripts/prepare_p2_geometry_data.py --dataset all \
   --data-root "$SCREENRESTORE_DATA_ROOT" --met-count 1500
-python scripts/label_private_geometry.py \
-  --data-root "$SCREENRESTORE_DATA_ROOT" \
-  --image-directory "$SCREENRESTORE_DATA_ROOT/private" \
-  --output "$SCREENRESTORE_DATA_ROOT/private/geometry.annotations.jsonl"
 python -m training.quadlocator.generate_synthetic \
   --output-directory "$SCREENRESTORE_DATA_ROOT/geometry/synthetic" \
   --count 24000 --size 640 --negative-ratio 0.25 \
@@ -200,17 +205,136 @@ export P2_DEVICE=mps
 bash scripts/train_p2_geometry.sh preflight
 bash scripts/train_p2_geometry.sh stage-a
 bash scripts/train_p2_geometry.sh stage-b
-bash scripts/train_p2_geometry.sh stage-c
 bash scripts/train_p2_geometry.sh stage-d
 ```
 
-合成器会在生成前固定拆分公开内容与背景纹理，同一源作品或场景只进入一个 split；private
-层级不确定样本按自动拒绝语义提供 presence 负监督。
+合成器会在生成前固定拆分公开内容与背景纹理，同一源作品或场景只进入一个 split。
+隔离后的公开基础清单写入 `manifests/p13-public-base`；其中 calibration 仅含合成 validation，
+还需要独立实拍场景验证接受策略。训练入口会拒绝私人来源、分组和图片路径。
 
 每个训练 stage 自动导出 7-output ONNX、运行 SmartDoc e2e 诊断，并生成 public validation
-至少 50 张及 private validation/test 全量 overlay。Stage D 冻结权重，只读取 validation
+至少 50 张 overlay。Stage D 冻结权重，只读取公开 validation
 校准置信度；test 不参与阈值或模型选择。完整 P2 说明见 [训练说明](docs/TRAINING.md)，正式训练与
 验收结论见 [P2 自动几何结果](docs/P2_GEOMETRY_RESULTS.md)。
+
+新的 13 对象、每对象 6 视角实拍集固定作为 `development_validation_only`，不会进入梯度、
+阈值拟合或 checkpoint 选择。公开数据训练与选模完成后，先冻结 ONNX 对 78 张照片的预测，
+再读取逐帧人工四角评分；每个对象另输出固定正视帧的人工几何 Archive 恢复，自动链只在正式
+策略接受时输出结果：
+
+```bash
+source .venv/bin/activate
+which python
+export SCREENRESTORE_DATA_ROOT="$HOME/screenrestore-data"
+export PRIVATE_VALIDATION_RUN="<冻结模型名称>-$(date +%Y%m%d)"
+
+bash scripts/run_private_validation.sh prepare
+bash scripts/run_private_validation.sh freeze
+bash scripts/run_private_validation.sh label
+bash scripts/run_private_validation.sh score
+bash scripts/run_private_validation.sh review
+bash scripts/run_private_validation.sh restore
+```
+
+后续冻结模型复用同一批照片时，不重复生成索引；显式指向首次 `prepare` 的不可变索引：
+
+```bash
+export PRIVATE_VALIDATION_INDEX="$PWD/output/private-validation/b0-20260912/prepare/dataset-index.json"
+export PRIVATE_VALIDATION_RUN="<新冻结模型名称>-private-dev"
+bash scripts/run_private_validation.sh freeze
+bash scripts/run_private_validation.sh score
+bash scripts/run_private_validation.sh review
+bash scripts/run_private_validation.sh restore
+```
+
+原图与标注保留在数据根，预测、overlay、scorecard 和每对象恢复图写入
+`output/private-validation/$PRIVATE_VALIDATION_RUN/`。该集合会在每轮训练后重复查看，因此它是
+开发回归集，不能再承担最终盲测；发布前仍需另建从未用于调参的独立 test。当前 13 个 group
+也少于 100-group release gate，脚本会保持发布结论为 BLOCKED。
+
+`restore` 使用当前产品运行时可用的 Archive 流水线，并在报告中记录实际启用的恢复栈。训练目录中的
+P3 `.pt` checkpoint 在完成正式导出、数值一致性和运行时接入前不会被静默用于这些结果，避免把经典
+摄影校正误报成已训练模型效果。
+
+针对历史训练中“几何增强后的图片与标签未同步”的问题，可从冻结 B0 启动带公开验证保护门的恢复性
+微调。`train` 只使用公开/合成清单；`private` 在 ONNX 冻结后才读取私人标注评分：
+
+```bash
+source .venv/bin/activate
+which python
+P5_RUN_NAME=p5-geometry-aligned-20260912 bash scripts/train_p5_geometry_recovery.sh preflight
+P5_RUN_NAME=p5-geometry-aligned-20260912 bash scripts/train_p5_geometry_recovery.sh train
+P5_RUN_NAME=p5-geometry-aligned-20260912 bash scripts/train_p5_geometry_recovery.sh private
+```
+
+后续分阶段实验通过 `P5_LOSS_PROFILE` 与 `P5_TRAINABLE_SCOPE` 显式隔离任务，例如先用
+`content_only/content_head` 恢复角点热图，再单独处理 presence、class 和 outer；每个配置必须使用
+新的 `P5_RUN_NAME`，禁止覆盖或把多变量实验描述成单变量结论。
+目标域合成器会覆盖画作、明信片、屏幕的远拍小目标、偏心构图、墙面/桌面背景和多矩形干扰；
+生成到独立目录后，可用 `decision_only/decision_heads` 只更新 presence 与 class，并通过
+`P5_MANIFEST`、`P5_DATASET_ROOT` 和 `P5_CHECKPOINT_KIND=product` 显式指定数据与选模语义。
+目标域 v5 使用常见物体画幅、独立暗色 bezel、可选显示器支架和薄卡片纸边，并加入
+暗框/画架 artwork 作为 screen 线索的反事实；支架和画架均不进入 `outer_quad`。
+公开 replay 合并与隔离类别上下文分支可按以下方式复现：
+
+```bash
+python -m training.quadlocator.generate_synthetic \
+  --output-directory "$SCREENRESTORE_DATA_ROOT/geometry/synthetic-target-v5" \
+  --count 8000 --size 640 --negative-ratio 0.25 \
+  --content-directory "$SCREENRESTORE_DATA_ROOT/textures/met-open-access/images" \
+  --background-directory "$SCREENRESTORE_DATA_ROOT/backgrounds/coco/val2017"
+python scripts/build_p5_target_manifest.py \
+  --data-root "$SCREENRESTORE_DATA_ROOT" \
+  --base-manifest "$SCREENRESTORE_DATA_ROOT/manifests/p13-public-base/stage-b.geometry.jsonl" \
+  --target-manifest "$SCREENRESTORE_DATA_ROOT/geometry/synthetic-target-v5/manifest.jsonl" \
+  --target-root "$SCREENRESTORE_DATA_ROOT/geometry/synthetic-target-v5" \
+  --target-namespace target-v5 \
+  --output "$SCREENRESTORE_DATA_ROOT/manifests/p5/target-v5-replay.geometry.jsonl"
+P5_RUN_NAME=p5-screen-context-safe-v5 \
+  P5_MANIFEST="$SCREENRESTORE_DATA_ROOT/manifests/p5/target-v5-replay.geometry.jsonl" \
+  P5_LOSS_PROFILE=screen_context_correction \
+  P5_TRAINABLE_SCOPE=class_context_branch \
+  P5_CLASS_BALANCED_SAMPLING=1 \
+  bash scripts/train_p5_geometry_recovery.sh train
+```
+
+该分支只给 `screen` 类增加一个标量证据，不改变 artwork/postcard/none 的相对 logits；
+是否采用仍需同时通过旧 P2 validation、完整目标域 validation 和冻结私人开发集审计。
+当残差分支已无法同时改善 median 与 tail 时，可启动更宽主干的独立公开预训练；该路径
+从随机初始化训练全部模块，不能冻结随机头：
+
+```bash
+P5_RUN_NAME=p5-wide-w15-v5-stage-a \
+  P5_INITIALIZATION=scratch \
+  P5_WIDTH_MULTIPLIER=1.5 \
+  P5_MANIFEST="$SCREENRESTORE_DATA_ROOT/manifests/p5/target-v5-replay.geometry.jsonl" \
+  P5_LOSS_PROFILE=full \
+  P5_TRAINABLE_SCOPE=all \
+  bash scripts/train_p5_geometry_recovery.sh train
+```
+
+宽度 1.5 的公开预演已经证明几何主干具备继续扩展的价值；正式长训从该预演的
+`best_geometry.pt` warm start，使用完整公开 replay、自然 source/group 均衡采样、14 epoch 和中间里程碑
+checkpoint，预计在当前 Apple Silicon 上运行 11–13 小时。完整环境变量、保护门和可复制命令见
+[`docs/TRAINING.md`](docs/TRAINING.md#p5-正式宽模型长训节点)。私人开发集保持在模型与 ONNX
+冻结之后运行，不参与长训、选模或阈值拟合。
+
+正式 14-epoch 长训已完成。epoch 14 的公开 validation 最终 NCE median/P95 为
+`0.00428/0.04051`，IoU median/P05 为 `0.98193/0.86620`。针对实拍远景中四角跨实例拼接，
+运行时统一使用 `quad-coherent-evidence-guarded-v1`：四个角即使能组成合法凸四边形，仍会
+结合 content mask 与 boundary 比较是否来自同一个内容实例；替代候选的联合证据乘积至少
+翻倍才允许换角。公开 v6+v7 审计相对旧的 `quad-coherent-repair-v1` 将 NCE P95 从
+`0.09036` 改善到 `0.08845`、IoU P05 从 `0.74238` 改善到 `0.76155`，严格几何率从
+`0.70614` 提升到 `0.70721`。私人开发集总体 IoU 中位数保持 `0.79143`，screen 中位数从
+`0.95002` 提升到 `0.98808`，far 中位数从 `0.25431` 提升到 `0.37232`；78 张仍由公开
+校准器全部拒绝，尚未达到真实目标域自动扫描发布门。完整记录与复现路径见
+[`docs/TRAINING.md`](docs/TRAINING.md#2026-09-15-长训冻结结论)。
+
+当 content head 的中位数改善但困难样本退化时，可从该阶段的 milestone checkpoint
+使用 `tail/content_head` 低学习率微调；依然由 epoch-0 median/tail 保护门选择权重。
+若需在稳定基线与强微调之间插值，使用 `scripts/blend_quadlocator_checkpoints.py`；它会在同一
+公开 validation 口径下重算 baseline 与候选指标，只有全部保护门通过才生成
+`best_geometry.pt`。
 
 第二阶段的专项训练采用统一配对清单契约。准备真实去噪、去模糊、色彩/光照、反光、去摩尔纹
 或超分数据后，先执行审计，确保配对尺寸、图像可解码性以及 `group_id` / `capture_session` 不会
@@ -324,6 +448,12 @@ python scripts/evaluate_paired.py
 ```
 
 ## 文档
+
+P4-G3.7 已重新建立 B0 的共同 512、target-quad-bbox NCE baseline，并修复训练验证的
+角点匹配与 letterbox 裁剪语义。当前保持 B0；独立目标域数据不足，acceptance calibration
+保持 BLOCKED。阶段入口为 `bash scripts/run_p4_g37.sh preflight`，完整命令与数据要求见
+[P4 操作命令](docs/P4_NEXT_COMMANDS.md)、[P4-G3.7 结果](docs/P4_G37_RESULTS.md)和
+[数据隔离审计](docs/P4_DATA_ISOLATION_AUDIT.md)。
 
 - [架构](ARCHITECTURE.md)
 - [算法与失败场景](ALGORITHMS.md)

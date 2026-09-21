@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from screenrestore.cli import main
+from screenrestore.cli import _build_geometry_service, main
 from screenrestore.core.presets import PresetId, build_default_pipeline, build_registry
 from screenrestore.io.image_exporter import (
     ExportFormat,
@@ -96,3 +96,8 @@ def test_cli_smoke_uses_shared_pipeline_and_json_diagnostics(
     assert diagnostics["status"] == "ok"
     assert diagnostics["backend"] == "CPU/OpenCV"
     assert output.is_file()
+
+
+def test_cli_rejects_calibrator_without_quad_model(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="必须与 --quad-model 同时使用"):
+        _build_geometry_service(None, tmp_path / "calibrator.json")

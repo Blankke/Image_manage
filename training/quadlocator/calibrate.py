@@ -4,8 +4,8 @@
     source .venv/bin/activate
     which python
     python -m training.quadlocator.calibrate \
-        --checkpoint "$SCREENRESTORE_RUN_ROOT/p2/stage-c/best.pt" \
-        --manifest "$SCREENRESTORE_DATA_ROOT/manifests/p2/calibration.geometry.jsonl" \
+        --checkpoint "$SCREENRESTORE_RUN_ROOT/p2/stage-b/best.pt" \
+        --manifest "$SCREENRESTORE_DATA_ROOT/manifests/p2-public/calibration-public.geometry.jsonl" \
         --dataset-root "$SCREENRESTORE_DATA_ROOT" \
         --output "$SCREENRESTORE_RUN_ROOT/p2/calibration.json"
 
@@ -29,7 +29,8 @@ from torch.utils.data import DataLoader
 
 from training.quadlocator.dataset import QuadDataset
 from training.quadlocator.losses import _softargmax_corners
-from training.quadlocator.model import QuadLocatorS
+from training.quadlocator.model import QuadLocatorS, load_quadlocator_state_dict
+from training.quadlocator.train import _assert_public_training_manifest
 
 DEFAULT_THRESHOLDS = {
     "content_presence": 0.66,
@@ -71,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.batch_size < 1 or not 0.5 <= args.minimum_precision <= 1.0:
         raise ValueError("batch-size 或 minimum-precision 无效")
+    # 阈值选择也是模型开发，必须在读取 checkpoint 前拦截私人验收数据。
+    _assert_public_training_manifest(args.manifest)
     checkpoint = torch.load(
         args.checkpoint.expanduser().resolve(),
         map_location="cpu",
@@ -85,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     device = _device(args.device)
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    load_quadlocator_state_dict(model, checkpoint["state_dict"])
     model.to(device).eval()
     dataset = QuadDataset(
         args.manifest,

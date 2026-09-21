@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -27,6 +28,7 @@ from screenrestore.geometry import (
     ConfidencePolicy,
     CorrectnessCalibrator,
     LocalizationDecision,
+    ModelAgreementQuadDetector,
     OnnxQuadDetector,
     TargetClass,
 )
@@ -72,6 +74,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--quad-model", type=Path)
     parser.add_argument(
+        "--classic-agreement-snap",
+        action="store_true",
+        help="实验性：用与模型粗 content quad 一致的传统候选提供边缘落点",
+    )
+    parser.add_argument(
+        "--classic-agreement-min-iou",
+        type=float,
+        default=0.70,
+        help="进入双分支精修比较的最低模型/传统候选 IoU，默认 0.70",
+    )
+    parser.add_argument(
+        "--classic-agreement-max-corner-nce",
+        type=float,
+        default=0.12,
+        help="进入双分支精修比较的最大模型/传统候选角点 NCE，默认 0.12",
+    )
+    parser.add_argument(
         "--correctness-calibrator",
         type=Path,
         help="只读 JSON logistic 校准器；其阈值必须事先由 validation/calibration 冻结预测确定",
@@ -102,6 +121,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     data_directory = args.data_directory.expanduser().resolve()
     detector = OnnxQuadDetector(args.quad_model) if args.quad_model is not None else None
+    if args.classic_agreement_snap:
+        if detector is None:
+            raise ValueError("--classic-agreement-snap 必须同时提供 --quad-model")
+        detector = ModelAgreementQuadDetector(
+            detector,
+            minimum_agreement_iou=args.classic_agreement_min_iou,
+            maximum_corner_nce=args.classic_agreement_max_corner_nce,
+        )
     calibrator = (
         CorrectnessCalibrator.load(args.correctness_calibrator)
         if args.correctness_calibrator is not None
@@ -142,12 +169,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     report = {
         "protocol": "e2e_auto",
-        "protocol_version": 2,
+        "protocol_version": 4,
         "run_kind": "smoke" if args.smoke else "release_gate",
+        # 冻结预测并读取真值后才计算清单哈希，记录本次评分的来源与用途。
+        "manifest_split": args.split if args.manifest is not None else None,
+        "manifest_sha256": _sha256_file(args.manifest) if args.manifest is not None else None,
+        "quad_model_sha256": _sha256_file(args.quad_model) if args.quad_model is not None else None,
+        "correctness_calibrator_sha256": (
+            _sha256_file(args.correctness_calibrator)
+            if args.correctness_calibrator is not None else None
+        ),
         "inference_inputs": ["photo_rgb"],
         "forbidden_inference_inputs": ["clean_reference", "oracle_corners"],
         "oracle_loaded_after_all_predictions": True,
         "backend": "quadlocator_onnx" if args.quad_model is not None else "classic_fallback",
+        "classic_agreement_snap": bool(args.classic_agreement_snap),
+        "classic_agreement_limits": (
+            {
+                "minimum_iou": args.classic_agreement_min_iou,
+                "maximum_corner_nce": args.classic_agreement_max_corner_nce,
+                "selection_source": "public_validation",
+                "runtime_gate": (
+                    "model_refine_rejected_and_agreement_refine_accepted_and_"
+                    "boundary_support_improved_and_mask_consistency_improved"
+                ),
+            }
+            if args.classic_agreement_snap
+            else None
+        ),
         "correctness_calibrator": (
             str(args.correctness_calibrator.expanduser().resolve())
             if args.correctness_calibrator is not None
@@ -179,6 +228,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(output)
     return 0 if summary["status"] == "PASS" else 1
+
+
+def _sha256_file(path: Path) -> str:
+    """流式计算评测输入哈希，避免把图像或完整清单写入报告。"""
+
+    digest = hashlib.sha256()
+    with path.expanduser().resolve().open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _run_legacy_cases(
@@ -266,7 +325,9 @@ def _run_manifest_cases(
         truth = _truth_from_manifest_record(record, photo_shape)
         case_reports.append(
             {
-                "case": str(record.get("id", image_path.name)),
+                # 许多外部数据集会在不同目录复用文件名。缺少显式 id 时使用清单相对路径，
+                # 避免报告中的逐样本标识碰撞，保证预测与验收结果可以回溯到原图。
+                "case": _manifest_case_id(record),
                 "photo": str(record["image"]),
                 "decision": decision.to_dict(photo_shape),
                 "metrics": evaluate_geometry_decision(decision, truth),
@@ -404,6 +465,10 @@ def _truth_from_manifest_record(
 
 
 def _progress(done: int, total: int, message: str) -> None:
+    # 大数据集最多打印约 100 次更新，保留可见进度且避免重定向日志逐样本膨胀。
+    update_interval = max(1, int(np.ceil(total / 100)))
+    if done not in (0, total) and done % update_interval != 0:
+        return
     width = 24
     fraction = min(1.0, done / max(1, total))
     filled = round(width * fraction)
@@ -414,6 +479,15 @@ def _progress(done: int, total: int, message: str) -> None:
         file=sys.stderr,
         flush=True,
     )
+
+
+def _manifest_case_id(record: dict[str, Any]) -> str:
+    """返回稳定的逐样本标识；显式 id 为空时回退到清单相对图像路径。"""
+
+    explicit_id = record.get("id")
+    if explicit_id is not None and str(explicit_id).strip():
+        return str(explicit_id)
+    return str(record["image"])
 
 
 if __name__ == "__main__":

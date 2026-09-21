@@ -18,7 +18,11 @@ from pathlib import Path
 
 import torch
 
-from training.quadlocator.model import QuadLocatorExportWrapper, QuadLocatorS
+from training.quadlocator.model import (
+    QuadLocatorExportWrapper,
+    QuadLocatorS,
+    load_quadlocator_state_dict,
+)
 
 OUTPUT_NAMES = [
     "content_corner_heatmaps",
@@ -54,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             f"实际为 {checkpoint_format!r}"
         )
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    load_quadlocator_state_dict(model, checkpoint["state_dict"])
     model.eval()
     wrapper = QuadLocatorExportWrapper(model)
     image_size = int(checkpoint["image_size"])

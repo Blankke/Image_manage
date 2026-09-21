@@ -6,7 +6,7 @@
     which python
     python scripts/audit_p4_acceptance.py --mode validation \
       --checkpoint /runs/p4/trajectory/frozen-geometry.pt \
-      --manifest /data/manifests/p2/calibration.geometry.jsonl \
+      --manifest /data/manifests/p2-public/calibration-public.geometry.jsonl \
       --dataset-root /data --device mps --output-directory /runs/p4/acceptance
 
     python scripts/audit_p4_acceptance.py --mode test \
@@ -46,12 +46,17 @@ from benchmarks.geometry_e2e.run import (  # noqa: E402
 )
 from scripts.audit_p4_geometry_parity import _prediction_from_raw  # noqa: E402
 from training.quadlocator.correctness_calibrator import fit_calibrator  # noqa: E402
-from training.quadlocator.model import QuadLocatorS  # noqa: E402
+from training.quadlocator.model import (  # noqa: E402
+    QuadLocatorS,
+    load_quadlocator_state_dict,
+)
+from training.quadlocator.train import _assert_public_training_manifest  # noqa: E402
 
 from screenrestore.geometry import ConfidencePolicy, CorrectnessCalibrator  # noqa: E402
 from screenrestore.geometry.confidence import (  # noqa: E402
     CORRECTNESS_FEATURE_NAMES,
 )
+from screenrestore.geometry.decoder import CornerDecoderSpec, decode_corner_logits  # noqa: E402
 from screenrestore.geometry.detector import _letterbox_tensor  # noqa: E402
 from screenrestore.geometry.edge_refine import refine_quad_edges  # noqa: E402
 from screenrestore.geometry.types import RejectionReason, quadrilateral_is_valid  # noqa: E402
@@ -81,6 +86,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--calibrator", type=Path)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
+    parser.add_argument(
+        "--decoder",
+        choices=(
+            "decoder_v2",
+            "coherent_v1",
+            "coherent_class_hybrid_v1",
+            "coherent_guarded_v1",
+            "coherent_repair_v1",
+        ),
+        default="decoder_v2",
+        help="公开验证对照使用的角点实例选择策略",
+    )
     parser.add_argument("--output-directory", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.batch_size < 1:
@@ -89,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("validation 模式会自行拟合 calibrator，不能传入 --calibrator")
     if args.mode == "test" and args.calibrator is None:
         raise ValueError("test 模式必须传入 validation 冻结的 --calibrator")
+    if args.mode == "validation":
+        # acceptance 拟合属于模型选择，必须在创建输出目录前拒绝私人清单。
+        _assert_public_training_manifest(args.manifest)
     output_directory = args.output_directory.expanduser().resolve()
     if output_directory.exists():
         raise FileExistsError(f"拒绝覆盖已有 acceptance audit：{output_directory}")
@@ -104,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         paths,
         device=_device(args.device),
         batch_size=args.batch_size,
+        decoder_name=args.decoder,
     )
 
     # 先冻结所有照片侧 features，再读取完整标注生成 correctness target。
@@ -115,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         "mode": args.mode,
         "split": split,
         "protocol": "photo_only_features_then_frozen_gt",
+        "decoder": args.decoder,
         "checkpoint": _file_identity(checkpoint),
         "manifest": _file_identity(manifest),
         "sample_count": len(rows),
@@ -128,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "geometry": _geometry_report(rows),
         "candidate_margin": _candidate_margin_report(rows),
+        "nms_radius_sweep": _nms_radius_sweep_report(rows),
         "feature_associations": _feature_associations(rows),
         "boundary_audit": _boundary_report(rows),
         "current_hard_gate": _policy_metrics(rows, "hard_accepted"),
@@ -229,11 +252,12 @@ def _infer_acceptance_features(
     *,
     device: torch.device,
     batch_size: int,
+    decoder_name: str = "decoder_v2",
 ) -> dict[Path, dict[str, Any]]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     image_size = int(checkpoint["image_size"])
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    load_quadlocator_state_dict(model, checkpoint["state_dict"])
     model.to(device).eval()
     policy = ConfidencePolicy()
     output = {}
@@ -249,8 +273,9 @@ def _infer_acceptance_features(
             zip(batch_paths, documents, prepared, strict=True)
         ):
             raw = {name: raw_batch[name][local_index : local_index + 1] for name in OUTPUT_NAMES}
+            peak_radius_profile = _peak_radius_profile(raw["content_corner_heatmaps"])
             prediction = _prediction_from_raw(
-                raw, prepared_item[1], document.original_rgb.shape, "decoder_v2"
+                raw, prepared_item[1], document.original_rgb.shape, decoder_name
             )
             shape = document.original_rgb.shape
             scale = np.array([max(1, shape[1] - 1), max(1, shape[0] - 1)], np.float32)
@@ -278,6 +303,11 @@ def _infer_acceptance_features(
                 else 0.0
             )
             corner_items = prediction.decoder_diagnostics.get("content", {}).get("corners", [])
+            weakest_corner = min(
+                corner_items,
+                key=lambda item: float(item["peak_difference"]),
+                default=None,
+            )
             output[path] = {
                 # NCE 的权威口径使用目标包围盒对角线，因此保留像素坐标参与评分。
                 "coarse": coarse,
@@ -297,6 +327,9 @@ def _infer_acceptance_features(
                 "peak_ratio_min": float(
                     min((item["peak_ratio"] for item in corner_items), default=1.0)
                 ),
+                "peak_distance_at_weakest": float(
+                    weakest_corner["peak_distance"] if weakest_corner is not None else 0.0
+                ),
                 "entropy_mean": float(
                     np.mean([item["normalized_entropy"] for item in corner_items])
                 )
@@ -313,6 +346,7 @@ def _infer_acceptance_features(
                     if prediction.candidates
                     else 0.0
                 ),
+                "peak_radius_profile": peak_radius_profile,
                 "features": features,
                 "hard_confidence": float(hard_confidence),
                 "hard_reasons": hard_reasons,
@@ -343,6 +377,9 @@ def _infer_acceptance_features(
                 ),
                 "refinement_accepted": bool(refinement and refinement.accepted),
                 "refinement_reason": refinement.reason if refinement else "no_candidate",
+                "refinement_max_shift": float(max(refinement.corner_shifts))
+                if refinement
+                else 0.0,
                 "boundary_support": float(refinement.mean_support) if refinement else 0.0,
                 "residual_median": float(max(refinement.residual_median)) if refinement else 999.0,
                 "residual_p95": float(max(refinement.residual_p95)) if refinement else 999.0,
@@ -491,8 +528,88 @@ def _candidate_margin_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "point_biserial_pearson": _pearson(margin, labels),
         "spearman": _spearman(margin, labels),
         "average_precision": _average_precision(margin, labels.astype(bool)),
+        "weakest_peak_distance_distribution": _distribution(
+            [float(row.get("peak_distance_at_weakest", 0.0)) for row in usable]
+        ),
+        "low_margin_distance_buckets": _low_margin_distance_buckets(usable),
         "at_0_06": fixed,
         "precision_recall_risk_coverage_curve": curve,
+    }
+
+
+def _peak_radius_profile(heatmaps: np.ndarray) -> dict[str, dict[str, float]]:
+    """一次前向结果上重算多个 NMS 半径，避免为诊断重复运行模型。"""
+
+    profile: dict[str, dict[str, float]] = {}
+    for radius in (3, 4, 5, 6, 8, 12):
+        decoded = decode_corner_logits(heatmaps, CornerDecoderSpec(nms_radius=radius))
+        weakest = min(decoded.diagnostics, key=lambda item: item.peak_difference)
+        profile[str(radius)] = {
+            "candidate_margin": float(weakest.peak_difference),
+            "peak_distance_at_weakest": float(weakest.peak_distance),
+        }
+    return profile
+
+
+def _nms_radius_sweep_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """比较 NMS 半径的公开 correctness 识别力；这里只诊断，不修改正式策略。"""
+
+    output: dict[str, Any] = {
+        "definition": "recompute second-mode margin from the same frozen heatmaps",
+        "hard_threshold": 0.06,
+    }
+    for radius in (3, 4, 5, 6, 8, 12):
+        key = str(radius)
+        usable = [row for row in rows if row["has_candidate"] and key in row["peak_radius_profile"]]
+        margins = np.asarray(
+            [row["peak_radius_profile"][key]["candidate_margin"] for row in usable],
+            dtype=np.float64,
+        )
+        accepted = margins >= 0.06
+        correct = np.asarray([row["strict_correct"] for row in usable], dtype=bool)
+        true_positive = int(np.count_nonzero(accepted & correct))
+        false_positive = int(np.count_nonzero(accepted & ~correct))
+        strict_count = int(np.count_nonzero(correct))
+        output[key] = {
+            "sample_count": len(usable),
+            "margin_distribution": _distribution(margins.tolist()),
+            "accepted_count": int(np.count_nonzero(accepted)),
+            "precision": true_positive / max(1, true_positive + false_positive),
+            "strict_recall": true_positive / max(1, strict_count),
+            "true_positive": true_positive,
+            "false_positive": false_positive,
+        }
+    return output
+
+
+def _low_margin_distance_buckets(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    """区分局部肩峰与远处第二候选；这里只审计，不改变产品拒绝策略。"""
+
+    low_margin = [row for row in rows if float(row["candidate_margin"]) < 0.06]
+    buckets = {
+        "local_le_4": [
+            row for row in low_margin if float(row.get("peak_distance_at_weakest", 0.0)) <= 4.0
+        ],
+        "near_4_to_8": [
+            row
+            for row in low_margin
+            if 4.0 < float(row.get("peak_distance_at_weakest", 0.0)) <= 8.0
+        ],
+        "distinct_gt_8": [
+            row for row in low_margin if float(row.get("peak_distance_at_weakest", 0.0)) > 8.0
+        ],
+    }
+    return {
+        name: {
+            "sample_count": len(items),
+            "strict_correct_count": sum(bool(item["strict_correct"]) for item in items),
+            "strict_correct_rate": (
+                float(np.mean([bool(item["strict_correct"]) for item in items]))
+                if items
+                else 0.0
+            ),
+        }
+        for name, items in buckets.items()
     }
 
 
@@ -755,6 +872,9 @@ def _policy_metrics(rows: list[dict[str, Any]], field: str) -> dict[str, Any]:
 
 
 def _binary_policy_metrics(rows: list[dict[str, Any]], accepted: np.ndarray) -> dict[str, Any]:
+    accepted = np.asarray(accepted, dtype=bool)
+    if accepted.shape != (len(rows),):
+        raise ValueError("accepted 必须与完整 policy 样本一一对应")
     labels = np.asarray([row["strict_correct"] for row in rows], bool)
     in_scope = np.asarray([row["in_scope"] for row in rows], bool)
     true_positive = int(np.sum(accepted & labels))
@@ -770,6 +890,8 @@ def _binary_policy_metrics(rows: list[dict[str, Any]], accepted: np.ndarray) -> 
         "true_positive": true_positive,
         "false_positive": false_positive,
         "false_negative": false_negative,
+        "true_negative": int(np.sum(~accepted & ~labels)),
+        "in_scope_count": int(in_scope.sum()),
         "strict_correct_count": int(labels.sum()),
     }
 
@@ -833,8 +955,13 @@ def _write_feature_rows(path: Path, rows: list[dict[str, Any]], split: str) -> N
                 "group_id_sha256": hashlib.sha256(row["group_id"].encode("utf-8")).hexdigest(),
                 "group_partition": _group_partition(row["group_id"]),
                 "strict_correct": row["strict_correct"],
+                # 冻结每例硬门结果和拒绝原因，才能按场景定位高置信误接受。
+                "hard_accepted": row["hard_accepted"],
+                "hard_reasons": row["hard_reasons"],
                 "nce": row["stages"]["rollback"]["corner_nce"],
                 "iou": row["stages"]["rollback"]["quad_iou"],
+                "coarse_nce": row["stages"]["coarse"]["corner_nce"],
+                "coarse_iou": row["stages"]["coarse"]["quad_iou"],
                 "target_class": row["target_class"],
                 "predicted_target_class": row["predicted_target_class"],
                 "source": row["source"],
@@ -847,12 +974,15 @@ def _write_feature_rows(path: Path, rows: list[dict[str, Any]], split: str) -> N
                 "corner_peak_mean": row["corner_peak_mean"],
                 "peak_difference_min": row["peak_difference_min"],
                 "peak_ratio_min": row["peak_ratio_min"],
+                "peak_distance_at_weakest": row["peak_distance_at_weakest"],
                 "entropy_mean": row["entropy_mean"],
                 "entropy_max": row["entropy_max"],
                 "sharpness_min": row["sharpness_min"],
                 "candidate_margin": row["candidate_margin"],
+                "peak_radius_profile": row["peak_radius_profile"],
                 "boundary_support": row["boundary_support"],
                 "refinement_accepted": row["refinement_accepted"],
+                "refinement_max_shift": row["refinement_max_shift"],
                 "residual_median": row["residual_median"],
                 "residual_p95": row["residual_p95"],
                 "continuous_coverage": row["continuous_coverage"],

@@ -3,7 +3,8 @@
 使用示例：
     python -m training.quadlocator.correctness_calibrator \
       --input validation-features.jsonl --output correctness-calibrator.json \
-      --manifest-sha256 <sha256> --minimum-precision 0.99
+      --manifest /data/manifests/p2-public/calibration-public.geometry.jsonl \
+      --minimum-precision 0.99
 
 输入每行必须包含 ``strict_correct`` 布尔值以及 ``features`` 数值对象。该工具只能读取
 validation/calibration 冻结预测，禁止把 test 清单传入拟合过程。
@@ -12,12 +13,14 @@ validation/calibration 冻结预测，禁止把 test 清单传入拟合过程。
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
 from screenrestore.geometry.calibration import CorrectnessCalibrator
+from training.quadlocator.train import _assert_public_training_manifest
 
 
 def fit_calibrator(
@@ -83,17 +86,36 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="拟合 P3 几何严格正确率校准器")
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--minimum-precision", type=float, default=0.99)
     args = parser.parse_args(argv)
+    manifest = args.manifest.expanduser().resolve()
+    _assert_public_training_manifest(manifest)
+    manifest_hash = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    public_rows = {
+        str(row["image"]): str(row["source"])
+        for line in manifest.open(encoding="utf-8")
+        if line.strip()
+        if (row := json.loads(line)).get("split") == "validation"
+    }
     rows: list[dict[str, float]] = []
     labels: list[bool] = []
+    seen_photos: set[str] = set()
     for line in args.input.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
-        if record.get("split") == "test":
-            raise ValueError("test 预测禁止参与校准器拟合")
+        if record.get("split") != "validation":
+            raise ValueError("校准器只接受公开 validation 预测")
+        photo = str(record.get("photo", ""))
+        if (
+            photo in seen_photos
+            or photo not in public_rows
+            or record.get("source") != public_rows[photo]
+            or record.get("manifest_sha256") != manifest_hash
+        ):
+            raise ValueError("校准特征与公开清单的照片、来源或哈希不一致")
+        seen_photos.add(photo)
         features = record.get("features")
         if not isinstance(features, dict):
             raise ValueError("每条记录必须包含 features 对象")
@@ -102,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     calibrator = fit_calibrator(
         rows,
         labels,
-        manifest_sha256=args.manifest_sha256,
+        manifest_sha256=manifest_hash,
         minimum_precision=args.minimum_precision,
     )
     if args.output.exists():

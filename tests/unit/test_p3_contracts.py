@@ -21,7 +21,11 @@ from screenrestore.geometry import (
     remap_original_once,
     safe_radial_inverse_map,
 )
-from screenrestore.geometry.decoder import CornerDecoderSpec, decode_corner_logits
+from screenrestore.geometry.decoder import (
+    CornerDecoderSpec,
+    decode_coherent_corner_logits,
+    decode_corner_logits,
+)
 from screenrestore.restoration import RestorationRoute, route_artifacts
 
 
@@ -84,6 +88,94 @@ def test_candidate_margin_and_entropy_are_data_dependent() -> None:
     assert first.peak_difference != second.peak_difference
     assert 0.0 <= first.normalized_entropy <= 1.0
     assert first.normalized_entropy > second.normalized_entropy
+
+
+def test_coherent_decoder_keeps_four_corners_on_same_mask_instance() -> None:
+    """独立最高峰跨两个实例时，mask 与 boundary 应把四角重新绑定到实例 A。"""
+
+    size = 36
+    logits = np.full((1, 4, size, size), -9.0, np.float32)
+    quad_a = np.array([[3, 3], [16, 3], [16, 16], [3, 16]], np.float32)
+    quad_b = np.array([[19, 19], [32, 19], [32, 32], [19, 32]], np.float32)
+    for index, (point_a, point_b) in enumerate(zip(quad_a, quad_b, strict=True)):
+        # 让右上和左下通道错误地偏向另一个实例，复现真实远景中的跨框拼接。
+        a_logit, b_logit = ((8.0, 9.0) if index in (1, 3) else (9.0, 8.0))
+        logits[0, index, int(point_a[1]), int(point_a[0])] = a_logit
+        logits[0, index, int(point_b[1]), int(point_b[0])] = b_logit
+    mask = np.full((1, 1, size, size), -8.0, np.float32)
+    boundary = np.full_like(mask, -8.0)
+    cv2.fillConvexPoly(mask[0, 0], quad_a.astype(np.int32), 8.0)
+    cv2.polylines(boundary[0, 0], [quad_a.astype(np.int32)], True, 8.0, 2)
+
+    independent = decode_corner_logits(logits)
+    coherent = decode_coherent_corner_logits(logits, mask, boundary, top_k=2)
+
+    assert independent.coordinates is not None
+    assert coherent.coordinates is not None
+    assert not np.allclose(independent.coordinates, quad_a, atol=1.0)
+    assert np.allclose(coherent.coordinates, quad_a, atol=1.0)
+    assert coherent.coherence is not None
+    assert coherent.coherence["changed_from_independent_peaks"] is True
+    assert coherent.coherence["selected_ranks"] == [0, 1, 0, 1]
+
+
+def test_coherent_repair_preserves_semantically_valid_independent_peaks() -> None:
+    """保守修复模式不因 mask 偏移改写已经合法的四角通道组合。"""
+
+    logits = _corner_logits(20)
+    mask = np.full((1, 1, 20, 20), -8.0, np.float32)
+    boundary = np.full_like(mask, -8.0)
+    cv2.rectangle(mask[0, 0], (8, 8), (18, 18), 8.0, -1)
+    cv2.rectangle(boundary[0, 0], (8, 8), (18, 18), 8.0, 2)
+
+    independent = decode_corner_logits(logits)
+    repaired = decode_coherent_corner_logits(
+        logits,
+        mask,
+        boundary,
+        repair_only=True,
+    )
+
+    assert independent.coordinates is not None
+    assert repaired.coordinates is not None
+    assert np.allclose(repaired.coordinates, independent.coordinates)
+    assert repaired.coherence is not None
+    assert repaired.coherence["changed_from_independent_peaks"] is False
+    assert repaired.coherence["reason"] == "independent_peaks_semantically_valid"
+
+
+def test_guarded_coherent_decoder_requires_configured_evidence_gain() -> None:
+    """合法独立峰不能被证据增益不足的替代组合改写。"""
+
+    size = 36
+    logits = np.full((1, 4, size, size), -9.0, np.float32)
+    quad_a = np.array([[3, 3], [16, 3], [16, 16], [3, 16]], np.float32)
+    quad_b = np.array([[19, 19], [32, 19], [32, 32], [19, 32]], np.float32)
+    for index, (point_a, point_b) in enumerate(zip(quad_a, quad_b, strict=True)):
+        logits[0, index, int(point_a[1]), int(point_a[0])] = 8.0
+        # 独立最高峰完整落在另一个合法矩形 B；soft mask 与 boundary 偏向 A。
+        logits[0, index, int(point_b[1]), int(point_b[0])] = 9.0
+    mask = np.full((1, 1, size, size), -8.0, np.float32)
+    boundary = np.full_like(mask, -8.0)
+    cv2.fillConvexPoly(mask[0, 0], quad_a.astype(np.int32), 8.0)
+    cv2.polylines(boundary[0, 0], [quad_a.astype(np.int32)], True, 8.0, 2)
+
+    independent = decode_corner_logits(logits)
+    guarded = decode_coherent_corner_logits(
+        logits,
+        mask,
+        boundary,
+        top_k=2,
+        minimum_evidence_log_gain=100.0,
+    )
+
+    assert independent.coordinates is not None
+    assert guarded.coordinates is not None
+    assert np.allclose(guarded.coordinates, independent.coordinates)
+    assert guarded.coherence is not None
+    assert guarded.coherence["version"] == "quad-coherent-evidence-guarded-v1"
+    assert guarded.coherence["changed_from_independent_peaks"] is False
+    assert guarded.coherence["evidence_log_gain"] < 100.0
 
 
 def test_boundary_distance_target_and_balanced_loss() -> None:

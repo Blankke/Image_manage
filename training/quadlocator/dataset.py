@@ -13,6 +13,8 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 
+from screenrestore.io.geometry_isolation import validate_geometry_split_isolation
+
 CLASS_INDEX = {"artwork": 0, "postcard": 1, "screen": 2, "none": 3}
 VALID_SPLITS = {"train", "validation", "test"}
 AUGMENTATION_MODES = {"none", "photometric", "geometric", "full"}
@@ -31,6 +33,7 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         boundary_sigma: float = 1.5,
         dataset_root: str | Path | None = None,
         max_samples: int = 0,
+        min_source_samples: dict[str, int] | None = None,
         augment: bool | None = None,
         augmentation_mode: str | None = None,
         seed: int = 20260823,
@@ -71,10 +74,25 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         if max_samples < 0:
             raise ValueError("max_samples 不能为负数")
         if max_samples and max_samples < len(self.records):
-            selected = np.random.default_rng(seed).choice(
-                len(self.records), size=max_samples, replace=False
-            )
-            self.records = [self.records[int(index)] for index in sorted(selected)]
+            rng = np.random.default_rng(seed)
+            reserved: set[int] = set()
+            requirements = min_source_samples or {}
+            if sum(requirements.values()) > max_samples:
+                raise ValueError("来源最低样本数之和超过 max_samples")
+            for source, minimum in sorted(requirements.items()):
+                if minimum < 1:
+                    raise ValueError("来源最低样本数必须大于 0")
+                candidates = [
+                    index for index, record in enumerate(self.records)
+                    if _record_source(record) == source
+                ]
+                if len(candidates) < minimum:
+                    raise ValueError(f"数据来源 {source} 只有 {len(candidates)} 张，少于要求的 {minimum} 张")
+                reserved.update(int(index) for index in rng.choice(candidates, minimum, replace=False))
+            remaining = [index for index in range(len(self.records)) if index not in reserved]
+            chosen = rng.choice(remaining, max_samples - len(reserved), replace=False)
+            selected = sorted(reserved | {int(index) for index in chosen})
+            self.records = [self.records[index] for index in selected]
 
     def set_epoch(self, epoch: int) -> None:
         """让同一 seed 的逐 epoch 增强可复现，同时避免每轮固定同一变换。"""
@@ -127,6 +145,17 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
         )
         return {
             "image": image_tensor,
+            # 验证指标须与部署端一样裁掉 letterbox padding；不参与训练损失。
+            "image_bounds": torch.tensor(
+                [
+                    transform[4],
+                    transform[5],
+                    transform[4] + (source_rgb.shape[1] - 1) * transform[2],
+                    transform[5] + (source_rgb.shape[0] - 1) * transform[3],
+                ],
+                dtype=torch.float32,
+            )
+            / max(1, self.image_size - 1),
             "content_corner_heatmaps": torch.from_numpy(content_heatmaps),
             "outer_corner_heatmaps": torch.from_numpy(outer_heatmaps),
             "content_mask": torch.from_numpy(content_mask[None]),
@@ -173,7 +202,7 @@ class QuadDataset(Dataset[dict[str, torch.Tensor]]):
 
 
 class SourceGroupBalancedSampler(Sampler[int]):
-    """先均匀选择 source/group，再按 difficulty 与 taxonomy 加权选择困难帧。"""
+    """均衡抽取 source/group，并可把固定比例留给指定公开困难场景。"""
 
     def __init__(
         self,
@@ -182,20 +211,53 @@ class SourceGroupBalancedSampler(Sampler[int]):
         seed: int,
         samples_per_epoch: int = 0,
         difficulty_weighting: bool = False,
+        class_balancing: bool = False,
+        focus_taxonomies: tuple[str, ...] = (),
+        focus_probability: float = 0.0,
     ) -> None:
         if samples_per_epoch < 0:
             raise ValueError("samples_per_epoch 不能为负数")
+        if not 0.0 <= focus_probability <= 1.0:
+            raise ValueError("focus_probability 必须位于 0..1")
+        focus_set = {value.strip() for value in focus_taxonomies if value.strip()}
+        if bool(focus_set) != bool(focus_probability):
+            raise ValueError("focus_taxonomies 与 focus_probability 必须同时启用")
         self.dataset = dataset
         self.seed = seed
         self.epoch = 0
         self.sample_count = samples_per_epoch or len(dataset)
         grouped: dict[str, dict[str, list[int]]] = {}
+        class_grouped: dict[str, dict[str, dict[str, list[int]]]] = {}
         for index, record in enumerate(dataset.records):
             source = _record_source(record)
             group = str(record["group_id"])
+            target_class = str(record["target_class"])
             grouped.setdefault(source, {}).setdefault(group, []).append(index)
+            class_grouped.setdefault(target_class, {}).setdefault(source, {}).setdefault(
+                group, []
+            ).append(index)
         self._grouped = grouped
         self._sources = sorted(grouped)
+        self._class_grouped = class_grouped
+        self._classes = sorted(class_grouped)
+        self._class_balancing = class_balancing
+        focused: dict[str, dict[str, list[int]]] = {}
+        for index, record in enumerate(dataset.records):
+            taxonomies = {
+                str(record.get("scene_type", "")).strip(),
+                str(record.get("hard_taxonomy", "")).strip(),
+            }
+            if focus_set.isdisjoint(taxonomies):
+                continue
+            source = _record_source(record)
+            group = str(record["group_id"])
+            focused.setdefault(source, {}).setdefault(group, []).append(index)
+        if focus_set and not focused:
+            raise ValueError("训练 split 中没有匹配 focus_taxonomies 的样本")
+        self._focused = focused
+        self._focus_sources = sorted(focused)
+        self._focus_taxonomies = tuple(sorted(focus_set))
+        self._focus_probability = float(focus_probability)
         self._weights = np.asarray(
             [
                 _difficulty_weight(record) if difficulty_weighting else 1.0
@@ -212,13 +274,34 @@ class SourceGroupBalancedSampler(Sampler[int]):
     def __iter__(self):  # type: ignore[no-untyped-def]
         rng = np.random.default_rng(self.seed + self.epoch * 1_000_003)
         for _ in range(self.sample_count):
-            source = self._sources[int(rng.integers(0, len(self._sources)))]
-            groups = sorted(self._grouped[source])
-            group = groups[int(rng.integers(0, len(groups)))]
-            indices = self._grouped[source][group]
-            weights = self._weights[indices]
-            probabilities = weights / max(float(weights.sum()), 1e-8)
-            yield int(rng.choice(indices, p=probabilities))
+            if self._focused and rng.random() < self._focus_probability:
+                yield self._sample_grouped(rng, self._focused, self._focus_sources)
+                continue
+            grouped = self._grouped
+            sources = self._sources
+            if self._class_balancing:
+                # 先均匀选类，保证 none/artwork/screen 不会被 postcard 数量淹没；
+                # 再在该类可用来源中均匀选择，避免用单一合成来源撑起某一类别。
+                target_class = self._classes[int(rng.integers(0, len(self._classes)))]
+                grouped = self._class_grouped[target_class]
+                sources = sorted(grouped)
+            yield self._sample_grouped(rng, grouped, sources)
+
+    def _sample_grouped(
+        self,
+        rng: np.random.Generator,
+        grouped: dict[str, dict[str, list[int]]],
+        sources: list[str],
+    ) -> int:
+        """保持 source/group 均衡，再在同组连拍中按困难度抽取一帧。"""
+
+        source = sources[int(rng.integers(0, len(sources)))]
+        groups = sorted(grouped[source])
+        group = groups[int(rng.integers(0, len(groups)))]
+        indices = grouped[source][group]
+        weights = self._weights[indices]
+        probabilities = weights / max(float(weights.sum()), 1e-8)
+        return int(rng.choice(indices, p=probabilities))
 
 
 def _difficulty_weight(record: dict[str, Any]) -> float:
@@ -268,27 +351,8 @@ def _read_manifest(path: Path) -> list[dict[str, Any]]:
             if bool(record["present"]) == (record["target_class"] == "none"):
                 raise ValueError(f"manifest 第 {line_number} 行 present 与 target_class 矛盾")
             records.append(record)
-    _validate_group_isolation(records)
+    validate_geometry_split_isolation(records)
     return records
-
-
-def _validate_group_isolation(records: list[dict[str, Any]]) -> None:
-    """防止同一作品或连拍会话泄漏到多个数据 split。"""
-
-    assignments: dict[tuple[str, str], str] = {}
-    for record in records:
-        split = str(record["split"])
-        identifiers = [("group_id", str(record["group_id"]))]
-        capture_session = record.get("capture_session")
-        if capture_session:
-            identifiers.append(("capture_session", str(capture_session)))
-        for kind, value in identifiers:
-            key = (kind, value)
-            previous = assignments.setdefault(key, split)
-            if previous != split:
-                raise ValueError(
-                    f"数据泄漏：{kind}={value!r} 同时出现在 {previous} 与 {split}"
-                )
 
 
 def _quad(value: Any, required: bool) -> np.ndarray | None:
@@ -355,9 +419,7 @@ def _corner_heatmaps(
         x0, x1 = max(0, x - radius), min(output_size, x + radius + 1)
         y0, y1 = max(0, y - radius), min(output_size, y + radius + 1)
         gx0, gy0 = x0 - (x - radius), y0 - (y - radius)
-        heatmaps[index, y0:y1, x0:x1] = gaussian[
-            gy0 : gy0 + (y1 - y0), gx0 : gx0 + (x1 - x0)
-        ]
+        heatmaps[index, y0:y1, x0:x1] = gaussian[gy0 : gy0 + (y1 - y0), gx0 : gx0 + (x1 - x0)]
     return heatmaps
 
 

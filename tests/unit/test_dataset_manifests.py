@@ -27,6 +27,8 @@ from scripts.prepare_p2_geometry_data import (
     _select_midv_holo_clips,
 )
 
+from screenrestore.io.geometry_isolation import validate_geometry_split_isolation
+
 
 def test_smartdoc_manifest_converts_official_corner_order_and_skips_partial(tmp_path: Path) -> None:
     data_root = tmp_path / "screenrestore-data"
@@ -202,7 +204,7 @@ def test_public_budget_excludes_private_and_transient_p2_archives(tmp_path: Path
     assert _public_usage(tmp_path) == len(b"keep")
 
 
-def test_p2_stage_c_keeps_private_test_out_of_gradient_and_replays_public(
+def test_p2_manifests_exclude_private_samples_from_training_and_calibration(
     tmp_path: Path,
 ) -> None:
     from scripts.build_p2_geometry_manifests import main as build_p2_manifests
@@ -210,10 +212,17 @@ def test_p2_stage_c_keeps_private_test_out_of_gradient_and_replays_public(
     data_root = tmp_path / "screenrestore-data"
     (data_root / "manifests").mkdir(parents=True)
     (data_root / "geometry" / "smartdoc").mkdir(parents=True)
+    (data_root / "geometry" / "midv500").mkdir(parents=True)
+    (data_root / "geometry" / "midv-holo").mkdir(parents=True)
     (data_root / "geometry" / "synthetic" / "images").mkdir(parents=True)
     (data_root / "private").mkdir(parents=True)
     Image.new("RGB", (16, 16)).save(data_root / "geometry" / "smartdoc" / "sample.jpg")
+    Image.new("RGB", (16, 16)).save(data_root / "geometry" / "smartdoc" / "validation.jpg")
+    for source in ("midv500", "midv-holo"):
+        for split in ("train", "validation", "test"):
+            Image.new("RGB", (16, 16)).save(data_root / "geometry" / source / f"{split}.jpg")
     Image.new("RGB", (16, 16)).save(data_root / "geometry" / "synthetic" / "images" / "sample.jpg")
+    Image.new("RGB", (16, 16)).save(data_root / "geometry" / "synthetic" / "images" / "validation.jpg")
     for split in ("train", "validation", "test"):
         Image.new("RGB", (16, 16)).save(data_root / "private" / f"{split}.jpg")
 
@@ -234,17 +243,34 @@ def test_p2_stage_c_keeps_private_test_out_of_gradient_and_replays_public(
             "source": source,
         }
 
-    smartdoc = record("geometry/smartdoc/sample.jpg", "train", "smartdoc:1", "smartdoc")
-    synthetic = record("images/sample.jpg", "train", "synthetic:1", "synthetic")
+    smartdoc = [
+        record("geometry/smartdoc/sample.jpg", "train", "smartdoc:1", "smartdoc"),
+        record("geometry/smartdoc/validation.jpg", "validation", "smartdoc:2", "smartdoc"),
+    ]
+    synthetic = [
+        record("images/sample.jpg", "train", "synthetic:1", "synthetic"),
+        record("images/validation.jpg", "validation", "synthetic:2", "synthetic"),
+    ]
+    midv = {
+        source: [
+            record(f"geometry/{source}/{split}.jpg", split, f"{source}:{split}", source)
+            for split in ("train", "validation", "test")
+        ]
+        for source in ("midv500", "midv-holo")
+    }
     private = [
         record(f"private/{split}.jpg", split, f"private:{split}", "private-labeled")
         for split in ("train", "validation", "test")
     ]
     (data_root / "manifests" / "smartdoc.geometry.jsonl").write_text(
-        json.dumps(smartdoc) + "\n", encoding="utf-8"
+        "".join(json.dumps(value) + "\n" for value in smartdoc), encoding="utf-8"
     )
+    for source, rows in midv.items():
+        (data_root / "manifests" / f"{source}.geometry.jsonl").write_text(
+            "".join(json.dumps(value) + "\n" for value in rows), encoding="utf-8"
+        )
     (data_root / "geometry" / "synthetic" / "manifest.jsonl").write_text(
-        json.dumps(synthetic) + "\n", encoding="utf-8"
+        "".join(json.dumps(value) + "\n" for value in synthetic), encoding="utf-8"
     )
     (data_root / "private" / "geometry.annotations.jsonl").write_text(
         "".join(json.dumps(value) + "\n" for value in private), encoding="utf-8"
@@ -257,28 +283,43 @@ def test_p2_stage_c_keeps_private_test_out_of_gradient_and_replays_public(
                 str(data_root),
                 "--stage-a-synthetic-samples",
                 "1",
-                "--stage-c-replay-samples",
-                "1",
             ]
         )
         == 0
     )
-    stage_c = [
-        json.loads(line)
-        for line in (data_root / "manifests" / "p2" / "stage-c.geometry.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
+    for name in (
+        "stage-a.geometry.jsonl",
+        "stage-b.geometry.jsonl",
+        "calibration-public.geometry.jsonl",
+    ):
+        rows = [
+            json.loads(line)
+            for line in (data_root / "manifests" / "p13-public-base" / name).read_text(encoding="utf-8").splitlines()
+        ]
+        assert rows
+        assert all(not str(row["source"]).startswith("private") for row in rows)
+        assert all(
+            row["split"] == "train" for row in rows if row["source"] == "smartdoc"
+        )
+        assert all(
+            row["split"] == "train" for row in rows if row["source"] in {"midv500", "midv-holo"}
+        )
+        if name.startswith("calibration"):
+            assert {row["split"] for row in rows} == {"validation"}
+            assert all(row["source"] not in {"smartdoc", "midv500", "midv-holo"} for row in rows)
+    assert not (data_root / "manifests" / "p13-public-base" / "stage-c.geometry.jsonl").exists()
 
-    assert all(
-        record["source"] == "private-labeled"
-        for record in stage_c
-        if record["split"] in {"validation", "test"}
-    )
-    assert any(
-        record["source"] != "private-labeled" and record["split"] == "train"
-        for record in stage_c
-    )
+
+def test_smartdoc_capture_environment_cannot_cross_splits() -> None:
+    # 文档 model 不同也会复用同一桌面；训练读取器必须在读取图片前拦截。
+    rows = [
+        {"image": "geometry/smartdoc/frames/background01/book/frame.jpeg",
+         "source": "smartdoc", "split": "train", "group_id": "smartdoc:book"},
+        {"image": "geometry/smartdoc/frames/background01/letter/frame.jpeg",
+         "source": "smartdoc", "split": "validation", "group_id": "smartdoc:letter"},
+    ]
+    with pytest.raises(ValueError, match="scene_group_id"):
+        validate_geometry_split_isolation(rows)
 
 
 def test_private_grouping_merges_thumbnail_hd_and_content_duplicates(tmp_path: Path) -> None:

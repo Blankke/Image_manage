@@ -17,6 +17,11 @@ def quadlocator_loss(
     """组合角点、mask、boundary、存在性、类别与坐标一致性损失。"""
 
     if profile not in {
+        "decision_only",
+        "decision_correction",
+        "artwork_context_correction",
+        "screen_context_correction",
+        "content_confidence",
         "content_only",
         "content_heatmap_only",
         "content_coordinate_only",
@@ -28,7 +33,11 @@ def quadlocator_loss(
         "full",
     }:
         raise ValueError(
-            "loss profile 必须为 content_only/content_heatmap_only/content_coordinate_only/"
+            "loss profile 必须为 decision_only/decision_correction/"
+            "artwork_context_correction/screen_context_correction/"
+            "content_confidence/"
+            "content_only/"
+            "content_coordinate_only/"
             "content_mask/content_boundary/p2/boundary/tail/full"
         )
 
@@ -57,6 +66,63 @@ def quadlocator_loss(
         outputs["outer_presence_logits"], targets["outer_present"]
     )
     classification = F.cross_entropy(outputs["class_logits"], targets["target_class"])
+    if profile == "artwork_context_correction":
+        # 海报/墙面画作在几何已正确时仍常被 postcard 淹没。这里只训练 artwork
+        # one-vs-rest margin，并蒸馏 teacher 已答对的二分类边界，避免改写几何或
+        # screen/none 的稳定判断。
+        class_correction, class_preserved = _one_vs_rest_context_correction_loss(
+            outputs["class_logits"],
+            outputs["class_pre_artwork_context_logits"],
+            targets["target_class"],
+            target_index=0,
+        )
+        return class_correction, {
+            "total": float(class_correction.detach()),
+            "classification_correction": float(class_correction.detach()),
+            "class_preserved_fraction": float(class_preserved.detach()),
+        }
+    if profile == "screen_context_correction":
+        # 整图分支只修改 screen logit，因此用 screen-vs-rest margin 训练。凡 teacher
+        # 已经把 screen/非 screen 二分类答对的样本都做蒸馏，避免为了召回屏幕而把
+        # 黑框画作、海报等高价值负样本推成 screen。
+        class_correction, class_preserved = _screen_context_correction_loss(
+            outputs["class_logits"],
+            outputs["class_pre_context_logits"],
+            targets["target_class"],
+        )
+        return class_correction, {
+            "total": float(class_correction.detach()),
+            "classification_correction": float(class_correction.detach()),
+            "class_preserved_fraction": float(class_preserved.detach()),
+        }
+    if profile in {"decision_only", "decision_correction"}:
+        # P5 决策头隔离：content presence 与四分类共同优化。类别中的 none 已经
+        # 提供负样本监督，无需让 outer 或几何任务改写共享表征。
+        if profile == "decision_only":
+            total = 0.8 * presence + 0.6 * classification
+            return total, {
+                "total": float(total.detach()),
+                "presence": float(presence.detach()),
+                "classification": float(classification.detach()),
+            }
+        presence_correction, presence_preserved = _binary_correction_loss(
+            outputs["presence_logits"],
+            outputs["presence_base_logits"],
+            targets["presence"],
+        )
+        class_correction, class_preserved = _class_correction_loss(
+            outputs["class_logits"],
+            outputs["class_base_logits"],
+            targets["target_class"],
+        )
+        total = 0.8 * presence_correction + 0.6 * class_correction
+        return total, {
+            "total": float(total.detach()),
+            "presence_correction": float(presence_correction.detach()),
+            "classification_correction": float(class_correction.detach()),
+            "presence_preserved_fraction": float(presence_preserved.detach()),
+            "class_preserved_fraction": float(class_preserved.detach()),
+        }
     predicted_corners = local_softargmax_corners(outputs["content_corner_heatmaps"])
     corner_per_sample = F.smooth_l1_loss(
         predicted_corners,
@@ -90,6 +156,31 @@ def quadlocator_loss(
             "total": float(total.detach()),
             "content_heatmap": float(content_heatmap.detach()),
             "corner_geometry": float(corner_geometry.detach()),
+        }
+    if profile == "content_confidence":
+        # 只训练零初始化残差头：在原几何监督上加强 tail 与第二峰抑制，并通过
+        # logit 蒸馏限制更新幅度。最终是否采用仍由独立公开几何保护门决定。
+        positive_corner_errors = corner_per_sample[present_weights >= 0.5]
+        cvar = _tail_mean(positive_corner_errors, fraction=0.25)
+        ambiguity = _peak_ambiguity_penalty(outputs["content_corner_heatmaps"], present_weights)
+        residual_distillation = F.mse_loss(
+            outputs["content_corner_heatmaps"],
+            outputs["content_corner_base_heatmaps"].detach(),
+        )
+        total = (
+            2.0 * content_heatmap
+            + 1.2 * corner_geometry
+            + 0.35 * cvar
+            + 0.25 * ambiguity
+            + 0.25 * residual_distillation
+        )
+        return total, {
+            "total": float(total.detach()),
+            "content_heatmap": float(content_heatmap.detach()),
+            "corner_geometry": float(corner_geometry.detach()),
+            "corner_cvar": float(cvar.detach()),
+            "ambiguity": float(ambiguity.detach()),
+            "residual_distillation": float(residual_distillation.detach()),
         }
     if profile == "content_mask":
         # G2 只让 content corner 与 content mask 共同更新共享特征；mask 不通过
@@ -210,6 +301,95 @@ def _balanced_boundary_loss(logits: torch.Tensor, target: torch.Tensor) -> torch
     probability = torch.sigmoid(logits)
     focal = torch.pow(torch.abs(target - probability), 2.0)
     return (bce * focal).mean() + _dice_loss(logits, target)
+
+
+def _binary_correction_loss(
+    logits: torch.Tensor,
+    base_logits: torch.Tensor,
+    target: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """对旧头已高置信答对的样本做蒸馏，其余样本学习局部纠错。"""
+
+    detached_base = base_logits.detach()
+    base_probability = torch.sigmoid(detached_base)
+    base_correct = (base_probability >= 0.5) == (target >= 0.5)
+    base_confidence = torch.where(target >= 0.5, base_probability, 1.0 - base_probability)
+    preserve = base_correct & (base_confidence >= 0.6)
+    supervised = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    distillation = (logits - detached_base).square()
+    per_value = torch.where(preserve, distillation + 0.1 * supervised, supervised)
+    return per_value.mean(), preserve.float().mean()
+
+
+def _class_correction_loss(
+    logits: torch.Tensor,
+    base_logits: torch.Tensor,
+    target: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """保留旧分类头的高置信正确判断，只对错误/低置信样本施加强纠错。"""
+
+    base_probability = torch.softmax(base_logits.detach(), dim=1)
+    base_confidence, base_class = base_probability.max(dim=1)
+    preserve = (base_class == target) & (base_confidence >= 0.6)
+    supervised = F.cross_entropy(logits, target, reduction="none")
+    distillation = F.kl_div(
+        F.log_softmax(logits, dim=1),
+        base_probability,
+        reduction="none",
+    ).sum(dim=1)
+    per_sample = torch.where(preserve, distillation + 0.1 * supervised, supervised)
+    return per_sample.mean(), preserve.float().mean()
+
+
+def _screen_context_correction_loss(
+    logits: torch.Tensor,
+    base_logits: torch.Tensor,
+    target: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """纠正 screen-vs-rest，同时保持 teacher 已正确的二分类边界。"""
+
+    return _one_vs_rest_context_correction_loss(
+        logits,
+        base_logits,
+        target,
+        target_index=2,
+    )
+
+
+def _one_vs_rest_context_correction_loss(
+    logits: torch.Tensor,
+    base_logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    target_index: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """纠正一个目标类相对其余类别的 margin，并保护 teacher 正确边界。"""
+
+    detached_base = base_logits.detach()
+    if not 0 <= target_index < logits.shape[1]:
+        raise ValueError("target_index 超出类别范围")
+    other_indices = tuple(index for index in range(logits.shape[1]) if index != target_index)
+    base_margin = detached_base[:, target_index] - torch.logsumexp(
+        detached_base[:, other_indices], dim=1
+    )
+    corrected_margin = logits[:, target_index] - torch.logsumexp(
+        logits[:, other_indices], dim=1
+    )
+    binary_target = (target == target_index).to(dtype=logits.dtype)
+    base_correct = (base_margin >= 0.0) == (binary_target >= 0.5)
+    supervised = F.binary_cross_entropy_with_logits(
+        corrected_margin, binary_target, reduction="none"
+    )
+    distillation = F.smooth_l1_loss(
+        corrected_margin,
+        base_margin,
+        beta=0.25,
+        reduction="none",
+    )
+    # 已正确样本保留小量监督，使 margin 仍可朝安全方向移动；主要梯度留给 teacher
+    # 错误样本。这里不设置信心阈值，低置信但正确的 artwork 也必须受保护。
+    per_sample = torch.where(base_correct, distillation + 0.05 * supervised, supervised)
+    return per_sample.mean(), base_correct.float().mean()
 
 
 def _tail_mean(values: torch.Tensor, fraction: float) -> torch.Tensor:

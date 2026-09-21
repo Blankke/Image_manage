@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
-from .confidence import ConfidencePolicy
+from .confidence import ConfidencePolicy, mask_quad_consistency
 from .detector import ClassicQuadDetector, QuadDetector
 from .edge_refine import EdgeRefineParameters, refine_quad_edges
 from .rectify import estimate_aspect, order_corners
 from .types import (
+    EdgeRefinement,
     LocalizationDecision,
     LocalizationStatus,
     QuadPrediction,
@@ -94,10 +97,19 @@ class AutomaticGeometryService:
             prediction.boundary_map,
             self.refine_parameters,
         )
+        prediction, coarse, refinement, assessment_prediction, assessment_refinement = (
+            _select_model_agreement_branch(
+                image_rgb,
+                prediction,
+                coarse,
+                refinement,
+                self.refine_parameters,
+            )
+        )
         corners = refinement.corners
         confidence, rejection_reasons, components = self.policy.assess(
-            prediction,
-            refinement,
+            assessment_prediction,
+            assessment_refinement,
             image_rgb.shape,
         )
         aspect = estimate_aspect(corners, image_rgb.shape)
@@ -146,6 +158,120 @@ class AutomaticGeometryService:
             candidates=prediction.candidates,
             diagnostics=diagnostics,
         )
+
+
+def _select_model_agreement_branch(
+    image_rgb: np.ndarray,
+    prediction: QuadPrediction,
+    agreement_coarse: np.ndarray,
+    agreement_refinement: EdgeRefinement,
+    parameters: EdgeRefineParameters,
+) -> tuple[
+    QuadPrediction,
+    np.ndarray,
+    EdgeRefinement,
+    QuadPrediction,
+    EdgeRefinement,
+]:
+    """比较模型原四角与传统候选分支，只采纳有多项运行时证据的吸附。
+
+    该门由公开 validation 冻结：传统候选只有在模型原分支精修失败、候选分支精修
+    成功，且候选同时提高边界支持和模型 mask 一致性时才会生效。其余情况保留模型
+    原四角，防止传统轮廓凭矩形度覆盖内容层语义。
+    """
+
+    snap = prediction.decoder_diagnostics.get("model_agreement_snap")
+    if not isinstance(snap, dict) or snap.get("status") != "selected":
+        return (
+            prediction,
+            agreement_coarse,
+            agreement_refinement,
+            prediction,
+            agreement_refinement,
+        )
+    original = next(
+        (
+            item
+            for item in prediction.candidates
+            if item.layer == TargetLayer.CONTENT
+            and item.source != "quadlocator_classic_agreement"
+        ),
+        None,
+    )
+    if original is None:
+        return (
+            prediction,
+            agreement_coarse,
+            agreement_refinement,
+            prediction,
+            agreement_refinement,
+        )
+    try:
+        model_coarse = order_corners(original.corners)
+    except ValueError:
+        return (
+            prediction,
+            agreement_coarse,
+            agreement_refinement,
+            prediction,
+            agreement_refinement,
+        )
+    if not quadrilateral_is_valid(model_coarse, image_rgb.shape):
+        return (
+            prediction,
+            agreement_coarse,
+            agreement_refinement,
+            prediction,
+            agreement_refinement,
+        )
+    model_prediction = replace(prediction, content_quad=model_coarse)
+    model_refinement = refine_quad_edges(
+        image_rgb,
+        model_coarse,
+        prediction.boundary_map,
+        parameters,
+    )
+    agreement_mask = mask_quad_consistency(prediction, image_rgb.shape)
+    model_mask = mask_quad_consistency(model_prediction, image_rgb.shape)
+    use_agreement = bool(
+        agreement_refinement.accepted
+        and not model_refinement.accepted
+        and agreement_refinement.mean_support > model_refinement.mean_support + 1e-4
+        and agreement_mask > model_mask + 1e-4
+    )
+    decoder = dict(prediction.decoder_diagnostics)
+    enriched = dict(snap)
+    enriched.update(
+        {
+            "runtime_selection": "classic_agreement" if use_agreement else "model",
+            "model_refinement_accepted": bool(model_refinement.accepted),
+            "agreement_refinement_accepted": bool(agreement_refinement.accepted),
+            "model_boundary_support": round(float(model_refinement.mean_support), 8),
+            "agreement_boundary_support": round(
+                float(agreement_refinement.mean_support), 8
+            ),
+            "model_mask_consistency": round(model_mask, 8),
+            "agreement_mask_consistency": round(agreement_mask, 8),
+        }
+    )
+    decoder["model_agreement_snap"] = enriched
+    if use_agreement:
+        # 传统候选只改进几何落点。自动接受仍沿用模型原分支证据，防止候选吸附
+        # 把原本应拒绝的样本推过高置信度门。
+        return (
+            replace(prediction, decoder_diagnostics=decoder),
+            agreement_coarse,
+            agreement_refinement,
+            model_prediction,
+            model_refinement,
+        )
+    return (
+        replace(model_prediction, decoder_diagnostics=decoder),
+        model_coarse,
+        model_refinement,
+        model_prediction,
+        model_refinement,
+    )
 
 
 def _prediction_diagnostics(prediction: QuadPrediction) -> dict[str, object]:

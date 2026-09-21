@@ -31,8 +31,8 @@ SEED="${P3_SEED:-20260830}"
 B0_ROOT="/Users/caozichen/screenrestore-runs/p2-geometry-w1-20260829-110658/stage-b"
 B0_CHECKPOINT="$B0_ROOT/best.pt"
 B0_ONNX="$B0_ROOT/quadlocator-s.onnx"
-GEOMETRY_MANIFEST="$DATA_ROOT/manifests/p2/stage-b.geometry.jsonl"
-CALIBRATION_MANIFEST="$DATA_ROOT/manifests/p2/calibration.geometry.jsonl"
+GEOMETRY_MANIFEST="$DATA_ROOT/manifests/p13-public-base/stage-b.geometry.jsonl"
+CALIBRATION_MANIFEST="$DATA_ROOT/manifests/p13-public-base/calibration-public.geometry.jsonl"
 SMARTDOC_MANIFEST="$DATA_ROOT/manifests/smartdoc.geometry.jsonl"
 SMARTDOC_DIRECTORY="$DATA_ROOT/geometry/smartdoc/frames"
 TRAIN_HR="$DATA_ROOT/superres/div2k/DIV2K_train_HR"
@@ -123,6 +123,16 @@ preflight() {
   require_path "$SMARTDOC_DIRECTORY"
   require_path "$TRAIN_HR"
   require_path "$VALIDATION_HR"
+  python - "$GEOMETRY_MANIFEST" "$CALIBRATION_MANIFEST" <<'PY'
+import sys
+from pathlib import Path
+
+from training.quadlocator.train import _assert_public_training_manifest
+
+for manifest in sys.argv[1:]:
+    _assert_public_training_manifest(Path(manifest))
+print("公开训练与校准清单检查=PASS")
+PY
   if [[ "$DEVICE" == "mps" ]]; then
     require_mps
   fi
@@ -218,21 +228,13 @@ geometry_calibrate() {
   echo "geometry calibration evaluation exit=${evaluation_status}（validation gate 可为 FAIL）" >&2
   python scripts/prepare_geometry_calibration.py \
     --evaluation "$output_directory/evaluation.json" \
+    --manifest "$CALIBRATION_MANIFEST" \
     --output "$output_directory/features.jsonl" \
     --split validation
-  local manifest_hash
-  manifest_hash="$(python - "$CALIBRATION_MANIFEST" <<'PY'
-import hashlib
-import sys
-from pathlib import Path
-
-print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
-PY
-)"
   python -m training.quadlocator.correctness_calibrator \
     --input "$output_directory/features.jsonl" \
     --output "$output_directory/correctness-calibrator.json" \
-    --manifest-sha256 "$manifest_hash" \
+    --manifest "$CALIBRATION_MANIFEST" \
     --minimum-precision 0.99
 }
 

@@ -2,7 +2,7 @@
 
 from .calibration import CorrectnessCalibrator
 from .confidence import CORRECTNESS_FEATURE_NAMES, ConfidencePolicy
-from .detector import ClassicQuadDetector, OnnxQuadDetector, QuadDetector
+from .detector import ClassicQuadDetector, ModelAgreementQuadDetector, OnnxQuadDetector, QuadDetector
 from .edge_refine import EdgeRefineParameters, refine_quad_edges
 from .localizer import AutomaticGeometryService
 from .mappings import (
@@ -56,6 +56,7 @@ __all__ = [
     "RadialLensParameters",
     "LocalizationDecision",
     "LocalizationStatus",
+    "ModelAgreementQuadDetector",
     "OnnxQuadDetector",
     "QuadDetector",
     "QuadPrediction",

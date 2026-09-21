@@ -43,7 +43,10 @@ from benchmarks.geometry_e2e.run import (  # noqa: E402
     _resolve_manifest_image,
     _truth_from_manifest_record,
 )
-from training.quadlocator.model import QuadLocatorS  # noqa: E402
+from training.quadlocator.model import (  # noqa: E402
+    QuadLocatorS,
+    load_quadlocator_state_dict,
+)
 
 from screenrestore.geometry import AutomaticGeometryService, ConfidencePolicy  # noqa: E402
 from screenrestore.geometry.decoder import (  # noqa: E402
@@ -135,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     image_size = int(checkpoint["image_size"])
     model = QuadLocatorS(float(checkpoint["width_multiplier"]))
-    model.load_state_dict(checkpoint["state_dict"], strict=True)
+    load_quadlocator_state_dict(model, checkpoint["state_dict"])
     device = _torch_device(args.device)
     model.to(device).eval()
 
@@ -373,18 +376,60 @@ def _prediction_from_raw(
     image_shape: tuple[int, ...],
     decoder_name: str,
 ) -> QuadPrediction:
-    content_quad, confidences, content_diagnostics = _decode(
-        raw["content_corner_heatmaps"], transform, image_shape, decoder_name
-    )
+    coherent_decoders = {
+        "coherent_v1",
+        "coherent_class_hybrid_v1",
+        "coherent_guarded_v1",
+        "coherent_repair_v1",
+    }
+    class_probabilities = _softmax(raw["class_logits"].reshape(-1))
+    class_index = int(np.argmax(class_probabilities))
+    if decoder_name in coherent_decoders:
+        from screenrestore.geometry.decoder import decode_coherent_corner_logits
+
+        decoded = decode_coherent_corner_logits(
+            raw["content_corner_heatmaps"],
+            raw["content_mask_logits"],
+            raw["boundary_logits"],
+            repair_only=(
+                decoder_name == "coherent_repair_v1"
+                or (
+                    decoder_name == "coherent_class_hybrid_v1"
+                    and CLASS_ORDER[class_index] != TargetClass.SCREEN
+                )
+            ),
+            minimum_evidence_log_gain=(
+                float(np.log(2.0)) if decoder_name == "coherent_guarded_v1" else 0.0
+            ),
+        )
+        content_quad = _map_heatmap_coordinates(
+            decoded.coordinates,
+            transform,
+            image_shape,
+            raw["content_corner_heatmaps"].shape[2:],
+        )
+        confidences = decoded.confidences
+        content_diagnostics = {
+            "decoder": decoded.spec.to_dict(),
+            "corners": [item.to_dict() for item in decoded.diagnostics],
+            "coherence": decoded.coherence,
+        }
+    else:
+        content_quad, confidences, content_diagnostics = _decode(
+            raw["content_corner_heatmaps"], transform, image_shape, decoder_name
+        )
     outer_probability = float(_sigmoid(raw["outer_presence_logits"]).reshape(-1)[0])
     outer_quad = None
     outer_diagnostics = None
     if outer_probability >= 0.5:
         outer_quad, _outer_confidences, outer_diagnostics = _decode(
-            raw["outer_corner_heatmaps"], transform, image_shape, decoder_name
+            raw["outer_corner_heatmaps"],
+            transform,
+            image_shape,
+            "decoder_v2"
+            if decoder_name in coherent_decoders
+            else decoder_name,
         )
-    class_probabilities = _softmax(raw["class_logits"].reshape(-1))
-    class_index = int(np.argmax(class_probabilities))
     content_mask = _sigmoid(raw["content_mask_logits"].squeeze())
     boundary = _sigmoid(raw["boundary_logits"].squeeze())
     candidates: tuple[QuadrilateralCandidate, ...] = ()

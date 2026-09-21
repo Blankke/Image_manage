@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from math import log
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -9,7 +11,11 @@ import cv2
 import numpy as np
 
 from .classic import detect_classic_candidates
-from .decoder import CornerDecoderSpec, decode_corner_logits
+from .decoder import (
+    CornerDecoderSpec,
+    decode_coherent_corner_logits,
+    decode_corner_logits,
+)
 from .rectify import order_corners
 from .types import QuadPrediction, QuadrilateralCandidate, TargetClass, TargetLayer
 
@@ -73,6 +79,127 @@ class ClassicQuadDetector:
             candidates=(enriched_best, *candidates[1:]),
             backend="classic",
         )
+
+
+class ModelAgreementQuadDetector:
+    """用模型粗 content quad 在传统候选中选择边缘落点，保留模型语义与拒绝证据。
+
+    传统候选只在与模型四边形高度重合且角点移动受限时替换粗落点。类别、presence、
+    content mask、boundary 和所有模型置信度保持原值，因此该包装器不能让传统轮廓
+    绕过统一接受策略。
+    """
+
+    def __init__(
+        self,
+        detector: QuadDetector,
+        *,
+        max_candidates: int = 12,
+        minimum_agreement_iou: float = 0.70,
+        maximum_corner_nce: float = 0.12,
+        detection_max_edge: int = 1200,
+    ) -> None:
+        if max_candidates < 1:
+            raise ValueError("max_candidates 必须大于 0")
+        if not 0 < minimum_agreement_iou <= 1 or not 0 < maximum_corner_nce <= 1:
+            raise ValueError("agreement IoU 和 corner NCE 限位必须位于 (0, 1]")
+        self.detector = detector
+        self.max_candidates = max_candidates
+        self.minimum_agreement_iou = minimum_agreement_iou
+        self.maximum_corner_nce = maximum_corner_nce
+        self.detection_max_edge = detection_max_edge
+
+    def predict(
+        self,
+        image_rgb: np.ndarray,
+        target_hint: TargetClass | None = None,
+    ) -> QuadPrediction:
+        prediction = self.detector.predict(image_rgb, target_hint)
+        if prediction.content_quad is None:
+            return prediction
+        candidates = detect_classic_candidates(
+            image_rgb,
+            max_candidates=self.max_candidates,
+            detection_max_edge=self.detection_max_edge,
+        )
+        if not candidates:
+            return _with_agreement_diagnostics(prediction, "no_classic_candidate")
+        agreement = [_polygon_iou(item.corners, prediction.content_quad) for item in candidates]
+        best_index = int(np.argmax(agreement))
+        best = candidates[best_index]
+        best_iou = float(agreement[best_index])
+        diagonal = max(
+            1.0,
+            float(
+                np.linalg.norm(
+                    prediction.content_quad.max(axis=0) - prediction.content_quad.min(axis=0)
+                )
+            ),
+        )
+        corner_nce = float(
+            np.mean(np.linalg.norm(order_corners(best.corners) - order_corners(prediction.content_quad), axis=1))
+            / diagonal
+        )
+        diagnostics = {
+            "status": "selected",
+            "classic_runtime_rank": best_index + 1,
+            "agreement_iou": round(best_iou, 8),
+            "corner_nce": round(corner_nce, 8),
+            "classic_source": best.source,
+        }
+        if best_iou < self.minimum_agreement_iou or corner_nce > self.maximum_corner_nce:
+            diagnostics["status"] = "outside_limits"
+            return _with_agreement_diagnostics(prediction, diagnostics)
+
+        original = next(
+            (item for item in prediction.candidates if item.layer == TargetLayer.CONTENT),
+            None,
+        )
+        original_scores = dict(original.scores) if original is not None else {}
+        original_scores.update(
+            {
+                "model_agreement_iou": best_iou,
+                "model_agreement_corner_nce": corner_nce,
+            }
+        )
+        snapped = QuadrilateralCandidate(
+            corners=best.corners,
+            confidence=(
+                float(original.confidence)
+                if original is not None
+                else float(np.mean(prediction.corner_confidences))
+            ),
+            scores=original_scores,
+            source="quadlocator_classic_agreement",
+            layer=TargetLayer.CONTENT,
+        )
+        decoder = dict(prediction.decoder_diagnostics)
+        decoder["model_agreement_snap"] = diagnostics
+        return replace(
+            prediction,
+            content_quad=best.corners,
+            decoder_diagnostics=decoder,
+            candidates=(snapped, *prediction.candidates, *candidates),
+            backend=f"{prediction.backend}+classic_agreement",
+        )
+
+
+def _with_agreement_diagnostics(
+    prediction: QuadPrediction, diagnostics: str | dict[str, object]
+) -> QuadPrediction:
+    decoder = dict(prediction.decoder_diagnostics)
+    decoder["model_agreement_snap"] = (
+        {"status": diagnostics} if isinstance(diagnostics, str) else diagnostics
+    )
+    return replace(prediction, decoder_diagnostics=decoder)
+
+
+def _polygon_iou(first: np.ndarray, second: np.ndarray) -> float:
+    first_ordered = order_corners(first).astype(np.float32)
+    second_ordered = order_corners(second).astype(np.float32)
+    first_area = abs(float(cv2.contourArea(first_ordered)))
+    second_area = abs(float(cv2.contourArea(second_ordered)))
+    intersection, _polygon = cv2.intersectConvexConvex(first_ordered, second_ordered)
+    return float(intersection) / max(1e-8, first_area + second_area - float(intersection))
 
 
 class OnnxQuadDetector:
@@ -168,12 +295,19 @@ class OnnxQuadDetector:
             outer_presence,
             classes,
         ) = raw
+        content_mask = _sigmoid(np.asarray(mask_logits, np.float32).squeeze())
+        boundary_map = _sigmoid(np.asarray(boundary_logits, np.float32).squeeze())
+        content_decoder_diagnostics: dict[str, object] = {}
         content_quad, corner_confidences = _decode_corner_heatmaps(
             content_heatmaps,
             transform,
             image_rgb.shape,
+            mask_logits,
+            boundary_logits,
+            content_decoder_diagnostics,
         )
-        content_decoder_diagnostics = _heatmap_diagnostics(content_heatmaps)
+        if not content_decoder_diagnostics:
+            content_decoder_diagnostics = _heatmap_diagnostics(content_heatmaps)
         outer_presence_confidence = float(
             _sigmoid(np.asarray(outer_presence, np.float32)).reshape(-1)[0]
         )
@@ -197,8 +331,6 @@ class OnnxQuadDetector:
         class_confidence = float(class_probabilities[class_index])
         # hint 仅用于诊断下游分布，不覆盖模型类别结论。
         _ = target_hint
-        content_mask = _sigmoid(np.asarray(mask_logits, np.float32).squeeze())
-        boundary_map = _sigmoid(np.asarray(boundary_logits, np.float32).squeeze())
         candidates: list[QuadrilateralCandidate] = []
         if content_quad is not None:
             minimum_peak_difference = min(
@@ -301,11 +433,28 @@ def _decode_corner_heatmaps(
     heatmaps: np.ndarray,
     transform: tuple[float, float, int, int, int],
     image_shape: tuple[int, ...],
+    content_mask_logits: np.ndarray | None = None,
+    boundary_logits: np.ndarray | None = None,
+    diagnostics_output: dict[str, object] | None = None,
 ) -> tuple[np.ndarray | None, tuple[float, float, float, float]]:
     try:
-        decoded = decode_corner_logits(heatmaps)
+        decoded = (
+            decode_coherent_corner_logits(
+                heatmaps,
+                content_mask_logits,
+                boundary_logits,
+                # 合法独立峰只有在替代候选证据乘积至少翻倍时才换角；
+                # 无效峰仍允许同实例修复，避免类别错误进一步控制几何路径。
+                repair_only=False,
+                minimum_evidence_log_gain=log(2.0),
+            )
+            if content_mask_logits is not None and boundary_logits is not None
+            else decode_corner_logits(heatmaps)
+        )
     except ValueError as exc:
         raise RuntimeError("角点热图输出必须为 1×4×H×W") from exc
+    if diagnostics_output is not None:
+        diagnostics_output.update(_decoded_diagnostics(decoded))
     scale_x, scale_y, offset_x, offset_y, input_size = transform
     values = np.asarray(heatmaps)
     output_height, output_width = values.shape[2:]
@@ -335,10 +484,19 @@ def _heatmap_diagnostics(heatmaps: np.ndarray) -> dict[str, object]:
     """把统一解码器诊断压缩成可安全序列化的小型结构。"""
 
     decoded = decode_corner_logits(heatmaps, CornerDecoderSpec())
-    return {
+    return _decoded_diagnostics(decoded)
+
+
+def _decoded_diagnostics(decoded: object) -> dict[str, object]:
+    """压缩统一解码结果；联合选择证据与每角原始多峰证据分别保留。"""
+
+    result = {
         "decoder": decoded.spec.to_dict(),
         "corners": [item.to_dict() for item in decoded.diagnostics],
     }
+    if decoded.coherence is not None:
+        result["coherence"] = decoded.coherence
+    return result
 
 
 def _layer_confidence(

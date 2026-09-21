@@ -21,6 +21,8 @@ from screenrestore.core.presets import (
 from screenrestore.diagnostics.logging_config import configure_logging
 from screenrestore.geometry import (
     AutomaticGeometryService,
+    ConfidencePolicy,
+    CorrectnessCalibrator,
     OnnxQuadDetector,
     target_class_for_scene,
 )
@@ -60,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--json-diagnostics", action="store_true", help="向 stdout 输出 JSON 诊断")
     parser.add_argument("--quad-model", type=Path, help="可选 QuadLocator-S ONNX 模型路径")
+    parser.add_argument(
+        "--correctness-calibrator",
+        type=Path,
+        help="与当前解码策略匹配、由公开 validation 冻结的正确性校准器",
+    )
     return parser
 
 
@@ -95,8 +102,9 @@ def main(argv: list[str] | None = None) -> int:
             if loaded is not None
             else PresetId.DISPLAY
         )
-        geometry_service = AutomaticGeometryService(
-            OnnxQuadDetector(args.quad_model) if args.quad_model is not None else None
+        geometry_service = _build_geometry_service(
+            args.quad_model,
+            args.correctness_calibrator,
         )
         geometry_localization = _configure_corners(
             pipeline,
@@ -138,6 +146,18 @@ def main(argv: list[str] | None = None) -> int:
             "backend": "CPU/OpenCV",
             "preset": effective_preset.value,
             "geometry_localization": geometry_localization,
+            "geometry_policy": {
+                "correctness_calibrator": (
+                    str(args.correctness_calibrator.expanduser().resolve())
+                    if args.correctness_calibrator is not None
+                    else None
+                ),
+                "calibrated_threshold": (
+                    geometry_service.policy.calibrator.threshold
+                    if geometry_service.policy.calibrator is not None
+                    else None
+                ),
+            },
             "operator_timings": {key: round(value, 6) for key, value in pipeline.last_timings.items()},
             "warnings": warnings,
         }
@@ -154,6 +174,26 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"错误：{exc}", file=sys.stderr)
         return 2
+
+
+def _build_geometry_service(
+    quad_model: Path | None,
+    calibrator_path: Path | None,
+) -> AutomaticGeometryService:
+    """构造模型与接受策略；校准器不能脱离其对应的学习型照片证据单独使用。"""
+
+    if calibrator_path is not None and quad_model is None:
+        raise ValueError("--correctness-calibrator 必须与 --quad-model 同时使用")
+    calibrator = (
+        CorrectnessCalibrator.load(calibrator_path)
+        if calibrator_path is not None
+        else None
+    )
+    detector = OnnxQuadDetector(quad_model) if quad_model is not None else None
+    return AutomaticGeometryService(
+        detector,
+        policy=ConfidencePolicy(calibrator=calibrator),
+    )
 
 
 def _configure_corners(  # type: ignore[no-untyped-def]

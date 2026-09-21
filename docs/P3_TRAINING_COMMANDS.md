@@ -20,9 +20,9 @@ export P3_SEED=20260830
 
 脚本实际读取：
 
-- geometry：`$SCREENRESTORE_DATA_ROOT/manifests/p2/stage-b.geometry.jsonl`
-- calibration：`$SCREENRESTORE_DATA_ROOT/manifests/p2/calibration.geometry.jsonl`
-- SmartDoc test：`$SCREENRESTORE_DATA_ROOT/manifests/smartdoc.geometry.jsonl`
+- geometry：`$SCREENRESTORE_DATA_ROOT/manifests/p12-public-base/stage-b.geometry.jsonl`
+- calibration：`$SCREENRESTORE_DATA_ROOT/manifests/p12-public-base/calibration-public.geometry.jsonl`
+- SmartDoc 原始 test：`$SCREENRESTORE_DATA_ROOT/manifests/smartdoc.geometry.jsonl`；与训练共享拍摄环境，只作历史同场景诊断
 - Fidelity/专项 synthetic source：`$SCREENRESTORE_DATA_ROOT/superres/div2k/DIV2K_train_HR`
 - 固定 B0：`/Users/caozichen/screenrestore-runs/p2-geometry-w1-20260829-110658/stage-b/best.pt`
 - 固定 B0 ONNX：同目录 `quadlocator-s.onnx`

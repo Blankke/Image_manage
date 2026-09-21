@@ -1,13 +1,15 @@
-"""为有 GT 的 geometry validation/test 生成预测叠加图与 contact sheet。
+"""为有 GT 的 geometry split 生成预测叠加图与 contact sheet。
 
 使用范例：
     source .venv/bin/activate
     which python
     python scripts/render_geometry_overlays.py \
-        --manifest "$SCREENRESTORE_DATA_ROOT/manifests/p2/stage-b.geometry.jsonl" \
+        --manifest "$SCREENRESTORE_DATA_ROOT/manifests/p2-public/stage-b.geometry.jsonl" \
         --dataset-root "$SCREENRESTORE_DATA_ROOT" --split validation --max-images 50 \
         --quad-model "$SCREENRESTORE_RUN_ROOT/p2/stage-b/quadlocator-s.onnx" \
         --output-directory "$SCREENRESTORE_RUN_ROOT/p2/stage-b/overlays-public-validation"
+
+训练增强的标签视觉复核可传 ``--split train``；该模式只生成诊断图，不能充当独立评估。
 
 颜色：青色 content GT、蓝色 outer GT、绿色/橙色 content prediction、紫色 outer
 prediction。状态栏展示 corner、content/outer presence、class 和拒绝原因。报告使用匿名
@@ -53,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--dataset-root", type=Path, required=True)
-    parser.add_argument("--split", choices=("validation", "test"), required=True)
+    parser.add_argument("--split", choices=("train", "validation", "test"), required=True)
     parser.add_argument("--quad-model", type=Path, required=True)
     parser.add_argument("--correctness-calibrator", type=Path)
     parser.add_argument("--output-directory", type=Path, required=True)

@@ -27,11 +27,18 @@ ScreenRestore 的运行时 Python 依赖由各自许可证授权，具体锁定�
 
 | 数据 | 用途 | 许可证/权利边界 | 本项目处理 |
 | --- | --- | --- | --- |
+| SmartDoc 2015 Challenge 1 | 真实手机拍摄文档与杂志页的四角、桌面及透视条件 | 本地 `frames/LICENCE` 声明 CC BY 4.0，要求引用 Burie 等人在 ICDAR 2015 的 SmartDoc 论文；原始文档图片仍归各自作者 | 仅本地训练与审计，不提交原图或衍生图；若制作内容替换样本，保留原来源和改作说明 |
+| A New Image Dataset for Document Corner Localization, v3 | 真实手机文档照片及逐图四角标注的候选评估数据 | [Mendeley Data 数据页](https://data.mendeley.com/datasets/x3nm4cxr83/3)标注 CC BY 4.0，要求引用 Dizaj、Soheili 与 Mansouri 的 MVIP 2020 论文；照片中原始文档内容的权利仍需逐项核对 | 仓库外已抽样 60 张，发现重复拍摄场景和一条越界四角；图像、标注、隐私和内容权利审核通过前不进入训练或产品测试夹具 |
+| DOCCI | 真实场景照片及人工场景描述，供桌面纸面合成 | [Google 官方数据页](https://google.github.io/docci/)及[数据卡](https://huggingface.co/datasets/google/docci)标注图片与描述为 CC BY 4.0；需引用 Onoe 等 ECCV 2024 | 仓库内的 `datasets/manifests/docci_desk_backgrounds.json` 记录视觉复核通过的照片 ID；照片与合成图留在仓库外。DOCCI 的 `cluster_id` 是内容类别，全部衍生图保守归入同一来源家族，仅用于训练增强和诊断，不计作独立验收组 |
+| Open Images V7 | 寻找真实海报、画框、书籍与电视照片及人工物体框 | [官方许可说明](https://storage.googleapis.com/openimages/web/factsfigures.html)称标注为 CC BY 4.0、照片列为 CC BY 2.0，并要求逐图核实原始许可；[下载页](https://storage.googleapis.com/openimages/web/download_v7.html)提供每图作者、原始页面与许可字段 | 只在仓库外筛选元数据与候选图；图片须逐张复核原始页面许可、隐私、内容权利与四角。验证集物体框没有四个极值点，不能直接充当 content 四角或发布验收真值 |
+| Wikimedia Commons 文件页 | 寻找实拍海报及墙上画作的独立场景候选 | [Commons 分类页](https://commons.wikimedia.org/wiki/Category:Poster_displays)明确每张文件适用各自描述页的许可；[Imageinfo API](https://www.mediawiki.org/wiki/API:Imageinfo)提供逐文件许可元数据，不能替代文件页和画面内作品的权利核查 | 仅在仓库外下载受限大小的缩略图，保留文件页、作者和许可元数据；照片许可、被拍摄作品、场景家族和内容四角逐项审核前不进入训练或验收 |
 | MIDV-500 | 移动端文档四边形、透视、模糊、背景与 partial reject | 数据集 `license.txt`：CC-BY-SA-2.5；源文档图片的来源和修改见上游 sources index | 固定选择 10 种 document type，按 document group 切分；不提交图片 |
 | MIDV-Holo | 玻璃/覆膜反射、闪光灯、室内与户外光照下的文档四边形 | 数据集 `license.txt`：CC-BY-SA-2.5；上游请求衍生使用注明 Generated Photos face 来源 | 按 sample kind、lighting、device 和 ID/passport 受控抽取 clip；不提交图片 |
 | The Met Open Access | 合成 artwork 内容纹理 | 仅接受 API 返回 `isPublicDomain=true` 且有 primary image 的对象；对应 Open Access 图像按 CC0 使用 | 保存 object ID、对象页、原图 URL 与权利标记；不提交图片 |
 | COCO 2017 val | 合成场景背景池 | COCO 本身提供数据集条款；图片来自 Flickr，具体图片仍适用各自的 image-level license | 只下载官方 val2017，不下载 train2017；不提交图片 |
 | DIV2K | 已有合成内容/背景纹理池 | NTIRE/DIV2K 官方条款 | 复用现有 HR，本轮不重复下载、不提交图片 |
+| SynGallery | 展厅画作多视角几何候选数据 | [数据卡](https://huggingface.co/datasets/patryk-bartkowiak/SynGallery)标注 CC BY 4.0；来源画作为 The Met Open Access CC0；渲染场景所含第三方材质仅以不可提取像素形式分发 | 作者 Patryk Bartkowiak、Jakub Markil、Bartosz Kotrys、Dominik Michels、Sören Pirk、Wojtek Palubicki；论文 [SynGallery: A Synthetic Gallery of Real Paintings for Instance-Level Artwork Recognition](https://arxiv.org/abs/2607.18907)。仅在外部数据目录试验，不提交图像；四角经质量核验后才可进入训练 |
+| jsonschema 及其解析依赖 | 开发环境校验几何清单是否符合 JSON Schema | [上游项目](https://github.com/python-jsonschema/jsonschema)与已安装 wheel 元数据均标注 MIT；`attrs`、`jsonschema-specifications`、`referencing`、`rpds-py` 的已安装 wheel 元数据也均标注 MIT | 仅作为 dev 依赖，不进入产品运行时 |
 
 准备入口为 `scripts/prepare_p2_geometry_data.py`。该脚本默认限制 P2 新增原始公开数据为
 14 GiB，合成生成器另有 6 GiB 上限，总预算约 20 GiB；同时保留至少 10 GiB 文件系统

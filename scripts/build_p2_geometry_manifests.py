@@ -1,4 +1,4 @@
-"""合并 P2 geometry 数据并生成 Stage A/B/C 与 calibration 固定清单。
+"""合并公开 P2 geometry 数据并生成 Stage A/B 与公开 calibration 清单。
 
 使用范例：
     source .venv/bin/activate
@@ -7,9 +7,9 @@
     python scripts/build_p2_geometry_manifests.py \
         --data-root "$SCREENRESTORE_DATA_ROOT"
 
-脚本只读取显式数据根下的 JSONL 与图片路径，不复制图片。Stage C 只让 private-train
-进入梯度，同时混入 public/synthetic train replay；private-validation 用于选模，
-private-test 保持 test。所有输出按 group/capture_session 再做一次跨 split 泄漏检查。
+脚本只读取显式数据根下的公开 JSONL 与图片路径，不复制图片。SmartDoc 与 MIDV
+共享拍摄环境的来源只保留 train 文档；所有输出按作品、会话和场景家族检查 split 隔离。
+私人开发集由独立冻结预测流程读取。
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from screenrestore.io.geometry_isolation import (
+    MIDV500_SCENE_FAMILY,
+    MIDV_HOLO_SCENE_FAMILY,
+    SMARTDOC_SCENE_FAMILY,
+    validate_geometry_split_isolation,
+)
 
 REQUIRED_FIELDS = {"image", "split", "group_id", "present", "target_class"}
 VALID_SPLITS = {"train", "validation", "test"}
@@ -36,27 +43,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument("--stage-a-synthetic-samples", type=int, default=2400)
-    parser.add_argument("--stage-c-replay-samples", type=int, default=2400)
     args = parser.parse_args(argv)
-    if args.stage_a_synthetic_samples < 1 or args.stage_c_replay_samples < 1:
-        raise ValueError("synthetic/replay 样本数必须大于 0")
+    if args.stage_a_synthetic_samples < 1:
+        raise ValueError("synthetic 样本数必须大于 0")
     data_root = args.data_root.expanduser().resolve()
     if not data_root.is_dir():
         raise ValueError(f"data-root 不存在：{data_root}")
     output_directory = (
         args.output_directory.expanduser().resolve()
         if args.output_directory is not None
-        else data_root / "manifests" / "p2"
+        else data_root / "manifests" / "p13-public-base"
     )
     if not output_directory.is_relative_to(data_root):
         raise ValueError("P2 manifests 必须写入 data-root")
     output_directory.mkdir(parents=True, exist_ok=True)
 
-    smartdoc = _load_source(
+    smartdoc_source = _load_source(
         data_root,
         data_root / "manifests" / "smartdoc.geometry.jsonl",
         source="smartdoc",
     )
+    # 五种背景在文档模型之间复用，属于同一拍摄环境；不能把其旧 validation/test
+    # 行作为独立场景证据。仅将原始 train 文档纳入公开训练清单。
+    smartdoc = [
+        {**record, "scene_group_id": SMARTDOC_SCENE_FAMILY}
+        for record in smartdoc_source if record["split"] == "train"
+    ]
     synthetic = _load_source(
         data_root,
         data_root / "geometry" / "synthetic" / "manifest.jsonl",
@@ -64,46 +76,53 @@ def main(argv: list[str] | None = None) -> int:
         image_prefix=Path("geometry/synthetic"),
     )
     optional_public = []
+    excluded_midv = Counter()
     for filename, source in (
         ("midv500.geometry.jsonl", "midv500"),
         ("midv-holo.geometry.jsonl", "midv-holo"),
     ):
         path = data_root / "manifests" / filename
         if path.is_file():
-            optional_public.extend(_load_source(data_root, path, source=source))
+            source_rows = _load_source(data_root, path, source=source)
+            family = MIDV500_SCENE_FAMILY if source == "midv500" else MIDV_HOLO_SCENE_FAMILY
+            for record in source_rows:
+                if record["split"] == "train":
+                    optional_public.append({**record, "scene_group_id": family})
+                else:
+                    excluded_midv[(source, str(record["split"]))] += 1
         else:
             print(f"WARNING: 缺少可选公开清单：{path}", file=sys.stderr)
-    private_path = data_root / "private" / "geometry.annotations.jsonl"
-    private = (
-        _load_source(data_root, private_path, source="private-labeled")
-        if private_path.is_file()
-        else []
-    )
-    if not private:
-        print("WARNING: private 标注尚未完成，Stage C 清单不会生成", file=sys.stderr)
-
     stage_a_synthetic = _balanced_limit(synthetic, args.stage_a_synthetic_samples)
     stage_a = [*smartdoc, *stage_a_synthetic]
     stage_b = [*smartdoc, *optional_public, *synthetic]
     calibration = [record for record in stage_b if record["split"] == "validation"]
-    if private:
-        calibration.extend(record for record in private if record["split"] == "validation")
 
     outputs: dict[str, list[dict[str, Any]]] = {
         "stage-a.geometry.jsonl": stage_a,
         "stage-b.geometry.jsonl": stage_b,
-        "calibration.geometry.jsonl": calibration,
-        "all.geometry.jsonl": [*stage_b, *private],
+        "calibration-public.geometry.jsonl": calibration,
     }
-    if private:
-        replay_candidates = [record for record in stage_b if record["split"] == "train"]
-        replay = _balanced_limit(replay_candidates, args.stage_c_replay_samples)
-        outputs["stage-c.geometry.jsonl"] = [*private, *replay]
 
-    inventory: dict[str, object] = {"format_version": 1, "manifests": {}}
+    inventory: dict[str, object] = {
+        "format_version": 2,
+        "smartdoc_scene_policy": {
+            "scene_group_id": SMARTDOC_SCENE_FAMILY,
+            "train_samples_retained": len(smartdoc),
+            "correlated_validation_test_samples_excluded": len(smartdoc_source) - len(smartdoc),
+        },
+        "midv_scene_policy": {
+            "midv500_scene_group_id": MIDV500_SCENE_FAMILY,
+            "midv_holo_scene_group_id": MIDV_HOLO_SCENE_FAMILY,
+            "correlated_validation_test_samples_excluded": {
+                f"{source}:{split}": count
+                for (source, split), count in sorted(excluded_midv.items())
+            },
+        },
+        "manifests": {},
+    }
     for index, (filename, records) in enumerate(outputs.items(), start=1):
         _progress(index - 1, len(outputs), f"构建 {filename}")
-        _validate_group_isolation(records)
+        validate_geometry_split_isolation(records)
         path = output_directory / filename
         _write_jsonl(path, records)
         inventory["manifests"][filename] = _statistics(records)  # type: ignore[index]
@@ -148,6 +167,9 @@ def _load_source(
             record.setdefault("capture_session", str(record["group_id"]))
             record.setdefault("device", "unknown")
             record.setdefault("visible", bool(record["present"]))
+            # 旧合成器曾给拒绝样本写 visible=true；无目标时统一为 false。
+            if record["present"] is False and record["target_class"] == "none":
+                record["visible"] = False
             record.setdefault("occlusion", 0.0)
             record.setdefault("glare_level", "none")
             record.setdefault("ambiguous", False)
@@ -182,19 +204,6 @@ def _balanced_limit(records: list[dict[str, Any]], limit: int) -> list[dict[str,
         else:
             cursor += 1
     return sorted(selected, key=lambda item: (str(item["split"]), str(item["source"]), str(item["image"])))
-
-
-def _validate_group_isolation(records: list[dict[str, Any]]) -> None:
-    assignments: dict[tuple[str, str], str] = {}
-    for record in records:
-        split = str(record["split"])
-        if split not in VALID_SPLITS:
-            raise ValueError(f"非法 split：{split}")
-        for kind in ("group_id", "capture_session"):
-            key = (kind, str(record[kind]))
-            previous = assignments.setdefault(key, split)
-            if previous != split:
-                raise ValueError(f"P2 清单泄漏：{kind}={key[1]!r} 跨 {previous}/{split}")
 
 
 def _validate_record_semantics(record: dict[str, Any], manifest: Path, line_number: int) -> None:

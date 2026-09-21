@@ -61,6 +61,17 @@ def evaluate_geometry_decision(
             decision.proposed_corners,
             ground_truth.content_quad,
         )
+    coarse_metrics: dict[str, float] | None = None
+    if decision.coarse_corners is not None and ground_truth.content_quad is not None:
+        # 粗角点属于模型实际选中的 content；不能用事后挑出的最优候选代替。
+        coarse_nce, coarse_iou, coarse_maximum = corner_metrics(
+            decision.coarse_corners, ground_truth.content_quad
+        )
+        coarse_metrics = {
+            "corner_nce": round(coarse_nce, 8),
+            "quad_iou": round(coarse_iou, 8),
+            "max_corner_error_px": round(coarse_maximum, 4),
+        }
     class_correct = decision.target_class == ground_truth.target_class
     layer_correct = decision.layer == ground_truth.target_layer
     if ground_truth.target_class == TargetClass.NONE:
@@ -80,10 +91,11 @@ def evaluate_geometry_decision(
         )
     candidate_metrics = []
     if ground_truth.content_quad is not None:
-        for candidate in decision.candidates:
+        for runtime_rank, candidate in enumerate(decision.candidates, start=1):
             nce, iou, maximum = corner_metrics(candidate.corners, ground_truth.content_quad)
             candidate_metrics.append(
                 {
+                    "runtime_rank": runtime_rank,
                     "source": candidate.source,
                     "layer": candidate.layer.value,
                     "runtime_score": round(candidate.confidence, 6),
@@ -93,11 +105,15 @@ def evaluate_geometry_decision(
                 }
             )
     candidate_metrics.sort(key=lambda item: (item["corner_nce"], -item["quad_iou"]))
+    content_candidates = [
+        item for item in candidate_metrics if item["layer"] == TargetLayer.CONTENT.value
+    ]
     refinement_outcome = "neutral"
     if bool(decision.diagnostics.get("refinement_accepted", False)) is False:
         refinement_outcome = "rolled_back"
-    elif decision.coarse_corners is not None and ground_truth.content_quad is not None:
-        coarse_nce, coarse_iou, _ = corner_metrics(decision.coarse_corners, ground_truth.content_quad)
+    elif coarse_metrics is not None:
+        coarse_nce = coarse_metrics["corner_nce"]
+        coarse_iou = coarse_metrics["quad_iou"]
         if selected_nce < coarse_nce - 1e-5 and selected_iou > coarse_iou + 1e-5:
             refinement_outcome = "improved"
         elif selected_nce > coarse_nce + 1e-5 or selected_iou < coarse_iou - 1e-5:
@@ -116,8 +132,11 @@ def evaluate_geometry_decision(
         "refinement_outcome": refinement_outcome,
         "backend": decision.backend,
         "rejection_reasons": [reason.value for reason in decision.rejection_reasons],
-        "candidates": candidate_metrics,
-        "best_candidate": candidate_metrics[0] if candidate_metrics else None,
+        "coarse_selected": coarse_metrics,
+        # 排序由 GT 决定；runtime_rank 保留运行时原顺序，避免误用作接受依据。
+        "oracle_ranked_candidates": candidate_metrics,
+        "oracle_best_content_candidate": content_candidates[0] if content_candidates else None,
+        "oracle_best_any_candidate": candidate_metrics[0] if candidate_metrics else None,
     }
 
 
